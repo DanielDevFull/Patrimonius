@@ -1,0 +1,50 @@
+@import 'tailwindcss';
+
+/* Modo escuro controlado pela classe .dark no <html> (definida pela preferência do usuário). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Sem fontes externas: o app é 100% offline. */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif,
+    'Apple Color Emoji', 'Segoe UI Emoji';
+
+  /* Cor da marca (teal). Use bg-brand-600, text-brand-700 etc. */
+  --color-brand-50: #f0fdfa;
+  --color-brand-100: #ccfbf1;
+  --color-brand-200: #99f6e4;
+  --color-brand-300: #5eead4;
+  --color-brand-400: #2dd4bf;
+  --color-brand-500: #14b8a6;
+  --color-brand-600: #0d9488;
+  --color-brand-700: #0f766e;
+  --color-brand-800: #115e59;
+  --color-brand-900: #134e4a;
+  --color-brand-950: #042f2e;
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+  }
+  /* Números tabulares para valores monetários alinhados. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand-500;
+  }
+}
+
+/* Modo privacidade: valores marcados com .money ficam borrados. */
+.hide-values .money {
+  filter: blur(7px);
+  user-select: none;
+}
