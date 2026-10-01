@@ -612,6 +612,11 @@ export async function addChatMessage(role: ChatMessage['role'], text: string, pa
   return msg;
 }
 
+/** Atualiza o payload/texto de uma mensagem (ex.: marcar uma ação proposta como executada). */
+export async function updateChatMessage(id: ID, patch: Partial<Pick<ChatMessage, 'text' | 'payload'>>): Promise<void> {
+  await db.chat.update(id, patch);
+}
+
 export async function clearChat(): Promise<void> {
   await db.chat.clear();
 }
