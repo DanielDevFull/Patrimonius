@@ -20,7 +20,8 @@ import {
 import { db } from '@/db/db';
 import { useFinanceData, useToday } from '@/db/hooks';
 import { addAccount, addRecurring, addTransaction, updateTransaction } from '@/db/repo';
-import { plausibleDateRange } from '@/domain/dates';
+import { skipToCurrentMonth } from '@/features/recurring/recurring-utils';
+import { monthKey, parseISO, plausibleDateRange, startOfMonth } from '@/domain/dates';
 import { ACCOUNT_TYPE_ICONS, COLOR_PALETTE } from '@/domain/defaults';
 import type {
   Account,
@@ -318,6 +319,9 @@ function TransactionFormBody({ onClose, initial, transaction, onSaved, data, tod
     account: ID,
     category: ID,
   ): Promise<Transaction[]> {
+    // Data em mês passado: registra só este lançamento e passa a gerar a partir do mês corrente
+    // (os meses intermediários em geral já foram pagos/lançados e virariam pendentes vencidos).
+    const backdated = date < startOfMonth(monthKey(today));
     const rule = await addRecurring({
       type: flowType,
       amount: cents,
@@ -326,12 +330,27 @@ function TransactionFormBody({ onClose, initial, transaction, onSaved, data, tod
       accountId: account,
       frequency: 'mensal',
       startDate: date,
+      nextDate: backdated ? skipToCurrentMonth(date, 'mensal', parseISO(date).day, today) : undefined,
       endDate: null,
       autoGenerate: true,
       active: true,
     });
+    if (backdated) {
+      await addTransaction({
+        type: flowType,
+        amount: cents,
+        date,
+        description: finalDescription,
+        categoryId: category,
+        accountId: account,
+        status,
+        notes: notes.trim(),
+        tags,
+        recurringId: rule.id,
+      });
+    }
     const generated = await db.transactions.where('recurringId').equals(rule.id).toArray();
-    const first = generated.find((t) => t.date === date);
+    const first = backdated ? undefined : generated.find((t) => t.date === date);
     if (first) {
       const patch: Partial<Pick<Transaction, 'status' | 'notes' | 'tags'>> = { notes: notes.trim(), tags };
       if (status === 'pago') patch.status = 'pago';

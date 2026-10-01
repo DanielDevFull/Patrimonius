@@ -9,12 +9,13 @@ import {
   type GoalTrack,
 } from '@/analytics';
 import { ROUTES } from '@/app/navigation';
-import { addMonths, diffMonths, formatDateBR, formatMonthLong, monthKey } from '@/domain/dates';
+import { diffMonths, formatDateBR, formatMonthLong, monthKey } from '@/domain/dates';
 import { COLOR_PALETTE } from '@/domain/defaults';
 import { formatBRL, formatDecimal, formatPercent } from '@/domain/money';
 import { normalizeText, plural } from '@/domain/text';
 import type { FinanceData, Goal, Priority } from '@/domain/types';
 import { bullets, categoryLabel, dateRelative, money, sentences } from '../format';
+import { goalDateInMonths } from '../nlu';
 import type { AgentCard, CardTone, GoalDraft } from '../types';
 import type { Handler, TurnContext } from './context';
 
@@ -146,7 +147,7 @@ export const createGoalReply: Handler = (ctx) => {
   // Já existe uma meta com esse nome: avisa e propõe um nome diferente ("Viagem 2").
   const finalName = duplicate && name ? freeGoalName(data, name) : (name ?? 'Nova meta');
   const icon = goalIcon(finalName);
-  const targetDate = e.targetDate ?? (e.months && e.months > 0 ? addMonths(ctx.today, e.months) : null);
+  const targetDate = e.targetDate ?? (e.months && e.months > 0 ? goalDateInMonths(ctx.today, e.months) : null);
   // Mesma convenção de goalProgress: meta nova ainda sem aporte => o mês atual também conta como mês de aporte.
   const months = targetDate ? Math.max(1, diffMonths(ctx.month, monthKey(targetDate)) + 1) : null;
   const monthly = months ? Math.ceil(amount / months) : null;

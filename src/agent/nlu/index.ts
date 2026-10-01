@@ -1,4 +1,4 @@
-import { addMonths, formatDateBR } from '@/domain/dates';
+import { addMonthsToKey, endOfMonth, formatDateBR, monthKey } from '@/domain/dates';
 import { normalizeText } from '@/domain/text';
 import type { Account, Category, Goal, ISODate, Transaction } from '@/domain/types';
 import { suggestCategory } from '../categorizer';
@@ -13,6 +13,15 @@ import { findPeriod } from './period';
 import { budgetMonth, goalMonths, goalName, goalTargetDate } from './planning';
 import { CATEGORY_SYNONYMS } from './synonyms';
 import { expandSlang, fold, maskSpans, sameWord, words, type Span } from './text';
+
+
+/**
+ * Prazo de uma meta "em N meses": último dia do N-ésimo mês contando o atual, para que o plano tenha exatamente
+ * N aportes mensais (o mês corrente e o do prazo contam, como em goalProgress).
+ */
+export function goalDateInMonths(today: ISODate, months: number): ISODate {
+  return endOfMonth(addMonthsToKey(monthKey(today), Math.max(1, months) - 1));
+}
 
 export { extractAmount } from './amount';
 export { extractDate } from './dates';
@@ -293,7 +302,7 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
       e.targetDate = goalTargetDate(t, today);
       if (months) {
         e.months = months.months;
-        e.targetDate ??= addMonths(today, months.months);
+        e.targetDate ??= goalDateInMonths(today, months.months);
       }
       break;
     }
@@ -412,7 +421,7 @@ export function extractGoalTiming(text: string, today: ISODate): Pick<ParsedEnti
   const target = goalTargetDate(t, today);
   if (months) out.months = months.months;
   if (target) out.targetDate = target;
-  else if (months) out.targetDate = addMonths(today, months.months);
+  else if (months) out.targetDate = goalDateInMonths(today, months.months);
   return out;
 }
 

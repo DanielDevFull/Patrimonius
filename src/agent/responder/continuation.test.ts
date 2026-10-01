@@ -154,7 +154,8 @@ describe('regressões — o valor completa o pedido que o Pat deixou em aberto',
     expect(actionOf(second.reply, 'create_goal')?.draft).toMatchObject({
       name: 'Carro',
       targetAmount: 1000000,
-      targetDate: '2027-10-15',
+      // 12 aportes mensais: outubro/2026 a setembro/2027.
+      targetDate: '2027-09-30',
     });
   });
 

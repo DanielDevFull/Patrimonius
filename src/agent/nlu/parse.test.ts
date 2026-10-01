@@ -399,7 +399,7 @@ describe('parseMessage — orçamento e metas', () => {
     [
       'quero juntar 5000 para um notebook em 8 meses',
       'criar_meta',
-      { name: 'Notebook', amount: 500000, months: 8, targetDate: '2027-06-01' },
+      { name: 'Notebook', amount: 500000, months: 8, targetDate: '2027-05-31' },
     ],
     ['nova meta: carro de 50 mil em 2 anos', 'criar_meta', { name: 'Carro', amount: 5000000, months: 24 }],
     [
@@ -419,6 +419,9 @@ describe('parseMessage — orçamento e metas', () => {
       { name: 'Intercâmbio', targetDate: '2027-07-31' },
     ],
     ['como estão minhas metas?', 'status_metas'],
+    ['qual minha taxa de poupança?', 'resumo_mes'],
+    ['quanto estou poupando?', 'resumo_mes'],
+    ['quanto economizei esse mês?', 'resumo_mes'],
     ['quanto falta para a meta viagem?', 'status_metas', { goalId: 'goal-viagem' }],
     ['guardei 300 na meta viagem', 'aportar_meta', { amount: 30000, goalId: 'goal-viagem' }],
     ['aportar 200 na meta carro', 'aportar_meta', { amount: 20000, goalId: 'goal-carro' }],

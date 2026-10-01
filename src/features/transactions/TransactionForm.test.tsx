@@ -232,7 +232,8 @@ describe('TransactionFormModal', () => {
     await user.type(await screen.findByLabelText('Valor'), '5.000');
     await user.type(screen.getByLabelText('Descrição'), 'Salário');
     expect(screen.getByLabelText('Categoria')).toHaveValue(CATEGORY_IDS.salario);
-    // Começou em agosto: gera agosto, setembro e outubro; só a data escolhida é marcada como recebida.
+    // Data em agosto (mês passado): registra agosto como recebido e só gera a partir do mês corrente —
+    // setembro não vira pendente vencido.
     fireEvent.change(screen.getByLabelText('Data'), { target: { value: '2026-08-05' } });
     await user.click(screen.getByRole('switch', { name: /Repetir todo mês/ }));
     expect(screen.queryByLabelText('Parcelas')).not.toBeInTheDocument();
@@ -259,15 +260,13 @@ describe('TransactionFormModal', () => {
     const txs = (await db.transactions.toArray()).sort((a, b) => a.date.localeCompare(b.date));
     expect(txs.map((t) => [t.date, t.status, t.recurringId])).toEqual([
       ['2026-08-05', 'pago', rule.id],
-      ['2026-09-05', 'pendente', rule.id],
       ['2026-10-05', 'pendente', rule.id],
     ]);
     expect(onSaved.mock.calls[0][0].map((t: { date: string }) => t.date)).toEqual([
       '2026-08-05',
-      '2026-09-05',
       '2026-10-05',
     ]);
-    expect(await screen.findByText('Recorrência mensal criada (3 lançamentos gerados).')).toBeInTheDocument();
+    expect(await screen.findByText('Recorrência mensal criada (2 lançamentos gerados).')).toBeInTheDocument();
   });
 
   it('“Salvar e novo” mantém tipo, conta e data e limpa o resto', async () => {

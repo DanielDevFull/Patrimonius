@@ -100,6 +100,11 @@ export const INTENT_VOCAB = [
 
 /** Palavras comuns que NÃO devem ser corrigidas (estão perto demais de palavras do vocabulário). */
 const PROTECTED = new Set([
+  'economizei',
+  'economizo',
+  'economizando',
+  'poupei',
+  'poupando',
   'gosto',
   'posto',
   'resto',
@@ -517,6 +522,12 @@ const QUERY_RULES: Rule[] = [
   [
     'assinaturas',
     /\b(assinaturas?|recorrentes?|recorrencias?|gastos fixos|despesas fixas|contas fixas|streamings?|mensalidades)\b/,
+    0.85,
+  ],
+  // Taxa de poupança ("qual minha taxa de poupança?", "quanto estou poupando?") — antes de 'dicas' (que casa "economizar").
+  [
+    'resumo_mes',
+    /\b(taxa de (?:poupanca|economia)|quanto (?:eu )?(?:estou|to|tou|ando|consigo|consegui) (?:poupando|economizando|guardando|poupar|economizar|guardar)|quanto (?:eu )?(?:poupei|economizei|economizo|poupo))\b/,
     0.85,
   ],
   [

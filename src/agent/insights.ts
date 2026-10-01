@@ -156,7 +156,19 @@ const forecastNegative: Rule = ({ data, today, month }) => {
 };
 
 const bills: Rule = ({ data, today, month }) => {
-  const items = upcomingItems(data, today, 3).filter((i) => i.type === 'despesa');
+  // Compras e parcelas no cartão de crédito não "vencem" sozinhas: entram na fatura.
+  const cardIds = new Set(data.accounts.filter((a) => a.type === 'cartao_credito').map((a) => a.id));
+  const txById = new Map(data.transactions.map((tx) => [tx.id, tx]));
+  const ruleById = new Map(data.recurring.map((r) => [r.id, r]));
+  const onCard = (i: { transactionId: string | null; recurringId: string | null }) => {
+    const accountId = i.transactionId
+      ? txById.get(i.transactionId)?.accountId
+      : i.recurringId
+        ? ruleById.get(i.recurringId)?.accountId
+        : undefined;
+    return accountId !== undefined && cardIds.has(accountId);
+  };
+  const items = upcomingItems(data, today, 3).filter((i) => i.type === 'despesa' && !onCard(i));
   const out: Insight[] = [];
   const overdue = items.filter((i) => i.overdue);
   if (overdue.length > 0) {

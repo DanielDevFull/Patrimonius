@@ -134,6 +134,21 @@ describe('generateInsights — fluxo de caixa', () => {
     // fora da janela de 3 dias
     expect(soon.message).not.toContain('Academia');
   });
+
+  it('parcelas e compras pendentes no cartão de crédito não aparecem como contas vencendo/vencidas', () => {
+    const list = insightsFor({
+      transactions: [
+        ...baseTransactions(),
+        tx({ amount: 15000, date: '2026-10-16', description: 'Tênis (2/3)', status: 'pendente', accountId: ACC.cartao, categoryId: CATEGORY_IDS.compras }),
+        tx({ amount: 8000, date: '2026-10-12', description: 'Livro (3/3)', status: 'pendente', accountId: ACC.cartao, categoryId: CATEGORY_IDS.compras }),
+      ],
+    });
+    for (const id of ['contas-vencendo', 'contas-vencidas']) {
+      const insight = find(list, id);
+      expect(insight?.message ?? '').not.toContain('Tênis');
+      expect(insight?.message ?? '').not.toContain('Livro');
+    }
+  });
 });
 
 describe('generateInsights — orçamentos e gastos', () => {
