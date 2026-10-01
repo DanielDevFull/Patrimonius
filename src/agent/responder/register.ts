@@ -1,9 +1,9 @@
 /** Handlers de registro: despesa, receita e transferência (sempre como AÇÃO PROPOSTA, o usuário confirma). */
-import { budgetStatuses } from '@/analytics';
+import { accountBalance, budgetStatuses } from '@/analytics';
 import { ROUTES } from '@/app/navigation';
-import { monthKey } from '@/domain/dates';
+import { formatDateBR, monthKey } from '@/domain/dates';
 import { CATEGORY_IDS } from '@/domain/defaults';
-import { formatBRL, formatPercent, splitCents } from '@/domain/money';
+import { formatBRL, formatDecimal, formatPercent, splitCents } from '@/domain/money';
 import type { Account, Category, CategoryKind, FinanceData } from '@/domain/types';
 import { suggestCategory } from '../categorizer';
 import {
@@ -13,7 +13,7 @@ import {
   dateRelative,
   sentences,
 } from '../format';
-import type { AgentCard, TransactionDraft } from '../types';
+import type { AgentCard, ParsedEntities, TransactionDraft } from '../types';
 import {
   activeAccounts,
   findAccount,
@@ -120,7 +120,13 @@ export const registerFlow: Handler = (ctx) => {
   if (amount === undefined || amount <= 0) {
     return {
       text: `Certo, vou registrar uma ${KIND_LABEL[kind]}${category ? ` em ${categoryLabel(category)}` : ''}. ${VALUE_QUESTION}`,
-      memory: { lastCategoryId: category?.id, lastAccountId: account?.id },
+      // O próximo valor completa este pedido com o que já foi dito (descrição, data, conta...).
+      memory: {
+        lastCategoryId: category?.id,
+        lastAccountId: account?.id,
+        lastEntities: { ...e, categoryId: category?.id, accountId: account?.id },
+        awaitingAmount: true,
+      },
     };
   }
 
@@ -152,24 +158,50 @@ export const registerFlow: Handler = (ctx) => {
   const head = `Entendi: ${what} em ${categoryLabel(draftCategory)}, ${when}${account ? `, ${accountPhrase(account)}` : ''}.`;
   const impact = kind === 'despesa' && draftCategory ? budgetImpact(ctx, draftCategory, date, firstPayment) : null;
 
+  const quantity = e.quantity && e.quantity > 1 ? e.quantity : null;
+  const others = e.otherEntries ?? [];
+  const verb = kind === 'despesa' ? 'Gastei' : 'Recebi';
   const text = sentences([
     head,
+    e.dateApprox
+      ? `Como você não disse o dia, usei ${formatDateBR(date)}${e.period ? ` (${e.period.label})` : ''} — ajuste a data antes de confirmar, se precisar.`
+      : null,
+    quantity
+      ? `Considerei ${formatBRL(amount)} no total; se foi ${formatBRL(amount)} cada, o total é ${formatBRL(amount * quantity)} — ajuste antes de confirmar.`
+      : null,
     category ? null : `Não reconheci a categoria, então usei ${draftCategory?.name ?? 'nenhuma'} — dá para trocar antes de confirmar.`,
     account ? null : 'Em qual conta? Escolha antes de confirmar.',
     status === 'pendente' ? 'Como a data ainda não chegou, ele fica como pendente.' : null,
     impact?.sentence,
+    others.length
+      ? `Você citou mais ${others.length === 1 ? 'um lançamento' : `${others.length} lançamentos`} (${others.map((o) => `“${o}”`).join(', ')}): este rascunho é só do primeiro. Me mande ${others.length === 1 ? 'o outro' : 'os outros'} em seguida — é só tocar na sugestão.`
+      : null,
     'Confirma?',
   ]);
 
+  const followUps = others.map((o) => (STARTS_WITH_VERB.test(o) ? capitalizeDescription(o) : `${verb} ${o}`));
+  if (quantity) followUps.push(`${verb} ${formatDecimal(amount * quantity)}${e.description ? ` em ${e.description}` : ''}`);
   const suggestions =
     kind === 'despesa'
       ? [
+          ...followUps,
           draftCategory ? `Quanto gastei com ${draftCategory.name} este mês?` : 'Quanto gastei este mês?',
           'Como está meu orçamento?',
           'Qual meu saldo?',
         ]
-      : ['Quanto ganhei este mês?', 'Resumo do mês', 'Qual meu saldo?'];
+      : [...followUps, 'Quanto ganhei este mês?', 'Resumo do mês', 'Qual meu saldo?'];
 
+  // Rascunho guardado para correções em seguida ("foi ontem", "no cartão").
+  const draftEntities: ParsedEntities = {
+    amount,
+    date: e.date,
+    dateApprox: e.dateApprox,
+    period: e.period,
+    description: e.description,
+    categoryId: category?.id,
+    accountId: account?.id,
+    installments: e.installments,
+  };
   return {
     text,
     cards: impact ? [impact.card] : [],
@@ -177,7 +209,21 @@ export const registerFlow: Handler = (ctx) => {
       { type: 'create_transaction', label: kind === 'despesa' ? 'Registrar despesa' : 'Registrar receita', draft },
     ],
     suggestions,
-    memory: { lastCategoryId: draftCategory?.id, lastAccountId: account?.id },
+    memory: { lastCategoryId: draftCategory?.id, lastAccountId: account?.id, lastEntities: draftEntities },
+  };
+};
+
+const STARTS_WITH_VERB =
+  /^(?:eu\s+)?(?:gastei|paguei|comprei|recebi|ganhei|caiu|entrou|transferi|guardei|almocei|jantei|abasteci)\b/i;
+
+/** Valor solto depois de uma consulta ("45"): pergunta se é gasto ou entrada em vez de supor uma despesa. */
+export const amountKindReply: Handler = (ctx) => {
+  const amount = ctx.entities.amount ?? 0;
+  const value = formatDecimal(amount);
+  return {
+    text: `${formatBRL(amount)} — é um gasto ou uma entrada? Me conte com uma palavra a mais, por exemplo: “gastei ${value} no mercado” ou “recebi ${value} de freela”.`,
+    suggestions: [`Gastei ${value}`, `Recebi ${value}`],
+    memory: 'keep',
   };
 };
 
@@ -187,7 +233,26 @@ export const transferFlow: Handler = (ctx) => {
   const accounts = activeAccounts(data);
   if (accounts.length === 0) return noAccountsReply('transferências');
   if (e.amount === undefined || e.amount <= 0) {
-    return { text: `Certo, uma transferência. ${VALUE_QUESTION}`, memory: { lastAccountId: e.accountId } };
+    const fromAcc = accounts.find((a) => a.id === e.accountId);
+    const toAcc = accounts.find((a) => a.id === e.toAccountId && a.id !== fromAcc?.id);
+    const memory = {
+      lastAccountId: e.accountId,
+      lastEntities: { accountId: e.accountId, toAccountId: e.toAccountId, date: e.date },
+      awaitingAmount: true,
+    };
+    if (toAcc?.type === 'cartao_credito') {
+      const bill = Math.max(0, -accountBalance(toAcc, data.transactions, { asOf: today }));
+      return {
+        text: sentences([
+          `Certo, pagamento da fatura ${toAcc.name.toLowerCase().startsWith('cart') ? 'do' : 'do cartão'} ${toAcc.name}${fromAcc ? ` com ${fromAcc.name}` : ''}. ${VALUE_QUESTION}`,
+          bill > 0 ? `A fatura em aberto é ${formatBRL(bill)}.` : null,
+        ]),
+        suggestions: bill > 0 ? [`Paguei ${formatDecimal(bill)} da fatura`] : [],
+        memory,
+      };
+    }
+    const route = `${fromAcc ? ` de ${fromAcc.name}` : ''}${toAcc ? ` para ${toAcc.name}` : ''}`;
+    return { text: `Certo, uma transferência${route}. ${VALUE_QUESTION}`, memory };
   }
   if (accounts.length < 2) {
     return {

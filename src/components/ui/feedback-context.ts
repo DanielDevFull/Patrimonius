@@ -14,8 +14,8 @@ export type ToastTone = 'success' | 'error' | 'info';
 export interface FeedbackApi {
   /** Abre um diálogo de confirmação; resolve true se o usuário confirmar. */
   confirm: (opts: ConfirmOptions) => Promise<boolean>;
-  /** Mostra uma notificação temporária. */
-  toast: (message: string, tone?: ToastTone) => void;
+  /** Mostra uma notificação temporária (some depois de `durationMs`, padrão 3,5 s). */
+  toast: (message: string, tone?: ToastTone, durationMs?: number) => void;
 }
 
 export const FeedbackContext = createContext<FeedbackApi | null>(null);

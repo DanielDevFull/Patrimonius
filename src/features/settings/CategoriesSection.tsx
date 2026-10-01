@@ -2,6 +2,7 @@ import { Archive, ArchiveRestore, ChevronDown, Pencil, Plus, Tags, Trash2 } from
 import { useMemo, useState } from 'react';
 import { Badge, Button, Card, CardHeader, cn, EmptyState, IconButton, SegmentedControl, useToast } from '@/components/ui';
 import { updateCategory } from '@/db/repo';
+import { RULE_50_30_20 } from '@/domain/defaults';
 import { plural } from '@/domain/text';
 import type { Budget, BudgetGroup, Category, CategoryKind, ID, RecurringRule, Transaction } from '@/domain/types';
 import { CategoryFormModal } from './CategoryFormModal';
@@ -14,10 +15,11 @@ const KIND_OPTIONS: { value: CategoryKind; label: string }[] = [
 ];
 
 const GROUP_ORDER: BudgetGroup[] = ['necessidades', 'desejos', 'objetivos'];
+const rulePct = (group: BudgetGroup) => `${Math.round(RULE_50_30_20[group] * 100)}%`;
 const GROUP_TITLES: Record<BudgetGroup, string> = {
-  necessidades: 'Necessidades · 50%',
-  desejos: 'Desejos · 30%',
-  objetivos: 'Objetivos financeiros · 20%',
+  necessidades: `Necessidades · ${rulePct('necessidades')}`,
+  desejos: `Desejos · ${rulePct('desejos')}`,
+  objetivos: `Objetivos financeiros · ${rulePct('objetivos')}`,
 };
 const GROUP_TONES: Record<BudgetGroup, 'info' | 'warning' | 'positive'> = {
   necessidades: 'info',
@@ -147,7 +149,7 @@ export function CategoriesSection({ categories, transactions, recurring, budgets
           </Button>
         }
       />
-      <SegmentedControl aria-label="Tipo de categoria" options={KIND_OPTIONS} value={kind} onChange={setKind} className="mb-3" />
+      <SegmentedControl mode="radio" aria-label="Tipo de categoria" options={KIND_OPTIONS} value={kind} onChange={setKind} className="mb-3" />
 
       {active.length === 0 ? (
         <EmptyState

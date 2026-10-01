@@ -208,8 +208,10 @@ export interface Debt extends Entity {
   /** Valor originalmente contratado (informativo). */
   originalAmount: Cents;
   /**
-   * Saldo devedor na data `balanceDate`. O saldo atual é
-   * `balance - soma(pagamentos com date >= balanceDate)` (mínimo 0).
+   * Saldo devedor na data `balanceDate`. O saldo atual é uma estimativa amortizada mês a mês (ver
+   * analytics/debts `debtCurrentBalance`): a cada pagamento com date >= balanceDate, somam-se os juros mensais
+   * (`interestRate`) das viradas de mês desde o pagamento anterior e desconta-se o valor pago (mínimo 0).
+   * Sem juros, é `balance - soma(pagamentos com date >= balanceDate)`.
    */
   balance: Cents;
   balanceDate: ISODate;
@@ -258,6 +260,11 @@ export interface Asset extends Entity {
   acquisitionDate: ISODate | null;
   notes: string;
   archived: boolean;
+  /**
+   * Data em que o bem foi arquivado (ex.: vendido). A partir dela ele deixa de contar no patrimônio; antes, o histórico
+   * o mantém. null/ausente se não estiver arquivado (ou em dados antigos, arquivados antes deste campo existir).
+   */
+  archivedAt?: ISODate | null;
 }
 
 /** Histórico de avaliações de um bem (para a evolução do patrimônio). */
@@ -368,12 +375,6 @@ export const PRIORITY_LABELS: Record<Priority, string> = {
   alta: 'Alta',
   media: 'Média',
   baixa: 'Baixa',
-};
-
-export const GOAL_STATUS_LABELS: Record<GoalStatus, string> = {
-  ativa: 'Ativa',
-  concluida: 'Concluída',
-  pausada: 'Pausada',
 };
 
 export const DEBT_TYPE_LABELS: Record<DebtType, string> = {

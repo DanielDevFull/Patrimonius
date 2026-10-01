@@ -1,8 +1,8 @@
-import { Bot, Lightbulb, MessageCircle, OctagonAlert, PartyPopper, Sparkles, TriangleAlert, X, type LucideIcon } from 'lucide-react';
-import { useState } from 'react';
+import { Bot, ChevronDown, Lightbulb, MessageCircle, OctagonAlert, PartyPopper, Sparkles, TriangleAlert, X, type LucideIcon } from 'lucide-react';
+import { useId, useState } from 'react';
 import type { Insight, InsightSeverity } from '@/agent';
 import { ROUTES } from '@/app/navigation';
-import { Badge, Card, CardHeader, cn, IconButton, useToast, type BadgeTone, MoneyText } from '@/components/ui';
+import { Badge, Button, Card, CardHeader, cn, IconButton, useToast, type BadgeTone, MoneyText } from '@/components/ui';
 import { dismissInsight } from '@/db/repo';
 import type { MonthKey } from '@/domain/types';
 import { LinkButton } from './shared';
@@ -34,7 +34,7 @@ const SEVERITY: Record<InsightSeverity, { label: string; icon: LucideIcon; tone:
   },
 };
 
-/** Quantos insights o painel mostra (os de maior prioridade). */
+/** Quantos insights o painel mostra de início (os de maior prioridade); "Ver todas" mostra o restante no próprio card. */
 export const DASHBOARD_INSIGHTS = 5;
 
 export interface InsightsCardProps {
@@ -49,7 +49,10 @@ export interface InsightsCardProps {
 export function InsightsCard({ insights, agentName, currentMonth, className }: InsightsCardProps) {
   const toast = useToast();
   const [busy, setBusy] = useState<string | null>(null);
-  const shown = insights.slice(0, DASHBOARD_INSIGHTS);
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+  const collapsible = insights.length > DASHBOARD_INSIGHTS;
+  const shown = expanded ? insights : insights.slice(0, DASHBOARD_INSIGHTS);
   const agent = agentName.trim() || 'Pat';
 
   async function dismiss(insight: Insight) {
@@ -78,7 +81,7 @@ export function InsightsCard({ insights, agentName, currentMonth, className }: I
             <p>Tudo em ordem por aqui. Nenhuma recomendação nova no momento — continue registrando seus lançamentos.</p>
           </div>
         ) : (
-          <ul className="space-y-3">
+          <ul id={listId} className="space-y-3">
             {shown.map((insight) => {
               const meta = SEVERITY[insight.severity];
               const Icon = meta.icon;
@@ -128,9 +131,23 @@ export function InsightsCard({ insights, agentName, currentMonth, className }: I
               ? `Mostrando ${shown.length} de ${insights.length} recomendações.`
               : 'Recomendações dispensadas voltam no próximo mês, se ainda fizerem sentido.'}
           </p>
-          <LinkButton to={ROUTES.assistant} icon={<MessageCircle size={16} aria-hidden />}>
-            Conversar com o {agent}
-          </LinkButton>
+          <div className="flex flex-wrap items-center gap-2">
+            {collapsible && (
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-expanded={expanded}
+                aria-controls={listId}
+                icon={<ChevronDown size={16} aria-hidden className={cn('transition-transform', expanded && 'rotate-180')} />}
+                onClick={() => setExpanded((v) => !v)}
+              >
+                {expanded ? 'Mostrar menos' : `Ver todas (${insights.length})`}
+              </Button>
+            )}
+            <LinkButton to={ROUTES.assistant} icon={<MessageCircle size={16} aria-hidden />}>
+              Conversar com o {agent}
+            </LinkButton>
+          </div>
         </div>
       </section>
     </Card>

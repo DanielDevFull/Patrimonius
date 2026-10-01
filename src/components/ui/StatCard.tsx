@@ -23,14 +23,18 @@ export function StatCard({ label, value, hint, icon, tone = 'neutral', className
   return (
     <div
       className={cn(
-        'flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900',
+        '@container flex min-w-0 items-start gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4 dark:border-slate-800 dark:bg-slate-900',
         className,
       )}
     >
       {icon && <div className={cn('flex size-10 shrink-0 items-center justify-center rounded-xl', ICON_TONES[tone])}>{icon}</div>}
       <div className="min-w-0">
         <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</p>
-        <p className="mt-1 text-xl font-bold [overflow-wrap:anywhere] text-slate-900 dark:text-white">{value}</p>
+        {/* O tamanho do valor acompanha a largura do cartão (ex.: 2 colunas no celular); se ainda não couber, quebra
+            a linha em vez de vazar do cartão. */}
+        <p className="mt-1 text-base font-bold [overflow-wrap:anywhere] text-slate-900 @min-[9rem]:text-lg @min-[10rem]:text-xl dark:text-white [&_.money]:whitespace-normal">
+          {value}
+        </p>
         {hint && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{hint}</p>}
       </div>
     </div>

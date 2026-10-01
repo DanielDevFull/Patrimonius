@@ -1,5 +1,6 @@
 /** Dívidas: situação atual e plano de quitação (avalanche x bola de neve). */
 import {
+  accountBalance,
   averageMonthlyIncome,
   compareStrategies,
   debtsOverview,
@@ -13,7 +14,8 @@ import { formatBRL, formatDecimal, formatPercent } from '@/domain/money';
 import { plural } from '@/domain/text';
 import { bullets, formatNumber, joinList, money, paragraphs, sentences } from '../format';
 import type { AgentCard } from '../types';
-import { sum, type Handler, type HandlerOutput } from './context';
+import { balanceQuery } from './cash';
+import { activeAccounts, sum, type Handler, type HandlerOutput } from './context';
 
 const STRATEGY_LABEL = {
   avalanche: 'avalanche (maior juros primeiro)',
@@ -45,10 +47,28 @@ function roundUp50(cents: number): number {
 
 /** status_dividas */
 export const debtsStatusReply: Handler = (ctx) => {
-  const { data } = ctx;
+  const { data, today } = ctx;
   const overview = debtsOverview(data.debts, data.debtPayments);
   const active = overview.items.filter((i) => i.debt.status === 'ativa' && i.currentBalance > 0);
-  if (active.length === 0) return noDebtsReply(data.debts.length > 0);
+  // "dívida do cartão", "quanto devo na fatura": a fatura em aberto também é dívida.
+  const creditCards = activeAccounts(data).filter((a) => a.type === 'cartao_credito');
+  const mentionsCard = /\b(cartao|cartoes|fatura|faturas)\b/.test(ctx.parsed.normalized);
+  if (mentionsCard && creditCards.length === 1 && !active.some((i) => i.debt.type === 'cartao')) {
+    return balanceQuery({ ...ctx, entities: { ...ctx.entities, accountId: creditCards[0].id } });
+  }
+  const cardBills = mentionsCard
+    ? sum(creditCards.map((a) => Math.max(0, -accountBalance(a, data.transactions, { asOf: today }))))
+    : 0;
+  if (active.length === 0) {
+    if (cardBills > 0) {
+      return {
+        text: `Você não tem dívidas cadastradas, mas as faturas em aberto dos cartões somam ${money(cardBills)}. Pague a fatura inteira no vencimento para fugir dos juros do rotativo.`,
+        actions: [{ type: 'navigate', label: 'Ver contas', to: ROUTES.accounts }],
+        suggestions: ['Contas a pagar', 'Qual meu saldo?'],
+      };
+    }
+    return noDebtsReply(data.debts.length > 0);
+  }
   const worst = active[0];
   const recorded = averageMonthlyIncome(data.transactions, ctx.month, 3);
   const income = recorded > 0 ? recorded : (data.settings.monthlyIncomeEstimate ?? 0);
@@ -62,6 +82,7 @@ export const debtsStatusReply: Handler = (ctx) => {
     ratio !== null
       ? `As parcelas comprometem ${formatPercent(ratio)} da sua renda${ratio > 0.3 ? ' — acima dos 30% recomendados. Evite novas dívidas por enquanto.' : '.'}`
       : null,
+    cardBills > 0 ? `Além disso, as faturas em aberto dos cartões somam ${formatBRL(cardBills)}.` : null,
   ]);
   const cards: AgentCard[] = [
     { type: 'stat', title: 'Total em dívidas', value: formatBRL(overview.totalBalance), tone: 'negative' },

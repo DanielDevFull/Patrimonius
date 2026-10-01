@@ -1,9 +1,9 @@
 import {
-  accountBalance,
   accountBalances,
   averageMonthlyExpense,
   averageMonthlyIncome,
   budgetStatuses,
+  cardCommitted,
   cashflowForecast,
   categoryBreakdown,
   debtsOverview,
@@ -14,6 +14,7 @@ import {
   monthSummary,
   monthlyToAnnualRate,
   netWorthHistory,
+  savingsTargetPct,
   upcomingItems,
   type RecurringCandidate,
 } from '@/analytics';
@@ -31,9 +32,9 @@ import {
   parseISO,
   startOfMonth,
 } from '@/domain/dates';
-import { CATEGORY_IDS } from '@/domain/defaults';
+import { CATEGORY_IDS, RULE_50_30_20 } from '@/domain/defaults';
 import { formatBRL, formatPercent } from '@/domain/money';
-import { plural } from '@/domain/text';
+import { normalizeText, plural } from '@/domain/text';
 import {
   DEBT_TYPE_LABELS,
   type Category,
@@ -269,17 +270,34 @@ const unusualExpenses: Rule = (ctx) => {
   const historyStart = startOfMonth(addMonthsToKey(month, -UNUSUAL_HISTORY_MONTHS));
   const monthStart = startOfMonth(month);
   const historyByCategory = new Map<ID, number[]>();
+  const historyByDescription = new Map<string, number[]>();
   for (const tx of data.transactions) {
     if (tx.type !== 'despesa' || tx.categoryId === null) continue;
     if (tx.date < historyStart || tx.date >= monthStart) continue;
     const list = historyByCategory.get(tx.categoryId) ?? [];
     list.push(tx.amount);
     historyByCategory.set(tx.categoryId, list);
+    const key = normalizeText(tx.description);
+    const same = historyByDescription.get(key) ?? [];
+    same.push(tx.amount);
+    historyByDescription.set(key, same);
   }
-  const found: { insight: Insight; ratio: number }[] = [];
+  // Gastos que se repetem (recorrências detectadas) não são "fora do padrão", mesmo acima da mediana da categoria.
+  const repeating = new Set(
+    ctx
+      .candidates()
+      .filter((c) => c.type === 'despesa')
+      .map((c) => normalizeText(c.description)),
+  );
+  const found: { insight: Insight; ratio: number; categoryId: ID }[] = [];
   for (const tx of data.transactions) {
-    if (!isConsumption(tx, ctx) || tx.categoryId === null || tx.recurringId !== null) continue;
+    if (!isConsumption(tx, ctx) || tx.categoryId === null || tx.recurringId !== null || tx.installment !== null) continue;
     if (!isInMonth(tx.date, month) || tx.date > today || tx.amount <= UNUSUAL_MIN_AMOUNT) continue;
+    const key = normalizeText(tx.description);
+    if (repeating.has(key)) continue;
+    // Já aconteceu antes com valor parecido (±30%), como o plano de saúde ou o abastecimento: é o padrão dele.
+    const similar = (historyByDescription.get(key) ?? []).filter((a) => Math.abs(a - tx.amount) <= tx.amount * 0.3);
+    if (similar.length >= 2) continue;
     const history = historyByCategory.get(tx.categoryId) ?? [];
     if (history.length < UNUSUAL_MIN_HISTORY) continue;
     const typical = median(history);
@@ -288,6 +306,7 @@ const unusualExpenses: Rule = (ctx) => {
     const category = ctx.categories.get(tx.categoryId);
     found.push({
       ratio,
+      categoryId: tx.categoryId,
       insight: {
         id: `gasto-incomum:${tx.id}:${month}`,
         severity: 'info',
@@ -299,8 +318,11 @@ const unusualExpenses: Rule = (ctx) => {
       },
     });
   }
+  // No máximo um por categoria (o mais fora do padrão): dois alertas sobre o mesmo gasto só repetem a mensagem.
+  const seen = new Set<ID>();
   return found
     .sort((a, b) => b.ratio - a.ratio || (a.insight.id < b.insight.id ? -1 : 1))
+    .filter((f) => !seen.has(f.categoryId) && Boolean(seen.add(f.categoryId)))
     .slice(0, 2)
     .map((f) => f.insight);
 };
@@ -336,14 +358,17 @@ const spendingLessThanLastMonth: Rule = (ctx) => {
 /* Poupança, reserva e regra 50/30/20                                  */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Poupança do mês anterior: "no vermelho" vale sempre; "meta batida"/"abaixo da meta" só quando o usuário
+ * definiu uma meta (savingsTargetPct !== null — 0% nas Configurações = sem meta).
+ */
 const savingsRate: Rule = ({ data, month, prevMonth }) => {
   const prev = monthSummary(data.transactions, prevMonth);
   if (prev.income <= 0 || prev.savingsRate === null) return [];
-  const targetPct = data.settings.savingsRateTarget > 0 ? data.settings.savingsRateTarget : 20;
-  const target = targetPct / 100;
+  const targetPct = savingsTargetPct(data.settings);
   const saved = prev.net + prev.invested;
   const prevLong = formatMonthLong(prevMonth);
-  if (prev.savingsRate >= target) {
+  if (targetPct !== null && prev.savingsRate >= targetPct / 100) {
     return [
       {
         id: `poupanca-meta:${month}`,
@@ -369,7 +394,8 @@ const savingsRate: Rule = ({ data, month, prevMonth }) => {
       },
     ];
   }
-  const missing = Math.ceil(prev.income * target - saved);
+  if (targetPct === null) return [];
+  const missing = Math.ceil(prev.income * (targetPct / 100) - saved);
   return [
     {
       id: `poupanca-abaixo:${month}`,
@@ -382,6 +408,15 @@ const savingsRate: Rule = ({ data, month, prevMonth }) => {
     },
   ];
 };
+
+/** Meta de reserva (pelo nome) e seu progresso, para explicar a diferença entre a meta e o colchão total. */
+function reserveGoalNote(data: FinanceData, today: ISODate): string {
+  const goal = data.goals.find((g) => g.status !== 'concluida' && /\b(reserva|emergencia)/.test(normalizeText(g.name)));
+  if (!goal) return '';
+  const p = goalsOverview([goal], data.goalContributions, today).items[0];
+  if (!p || p.percent >= 1) return '';
+  return ` Sua meta “${goal.name}” está em ${formatPercent(p.percent)}, mas aqui eu somo o dinheiro disponível em todas as contas.`;
+}
 
 const emergency: Rule = ({ data, today, month }) => {
   const fund = emergencyFund(data, today);
@@ -406,7 +441,7 @@ const emergency: Rule = ({ data, today, month }) => {
         severity: 'positivo',
         area: 'reserva',
         title: 'Reserva de emergência completa',
-        message: `Sua reserva de ${formatBRL(fund.reserve)} cobre ${formatMonthsCount(fund.monthsCovered)} de custos essenciais — a meta é ${formatMonthsCount(fund.targetMonths)}. Agora dá para focar nas outras metas.`,
+        message: `Sua reserva de ${formatBRL(fund.reserve)} cobre ${formatMonthsCount(fund.monthsCovered)} de custos essenciais — a meta é ${formatMonthsCount(fund.targetMonths)}.${reserveGoalNote(data, today)} Agora dá para focar nas outras metas.`,
         priority: 25,
       },
     ];
@@ -419,8 +454,8 @@ const rule503020: Rule = ({ data, month, prevMonth }) => {
   if (g.income <= 0) return [];
   const needs = g.shares.necessidades ?? 0;
   const wants = g.shares.desejos ?? 0;
-  const needsDev = needs - 0.5;
-  const wantsDev = wants - 0.3;
+  const needsDev = needs - RULE_50_30_20.necessidades;
+  const wantsDev = wants - RULE_50_30_20.desejos;
   if (Math.max(needsDev, wantsDev) < RULE_503020_TOLERANCE) return [];
   const prevLong = formatMonthLong(prevMonth);
   const isNeeds = needsDev >= wantsDev;
@@ -469,12 +504,13 @@ const expensiveDebts: Rule = ({ data, month }) => {
   });
 };
 
-const creditCardUsage: Rule = ({ data, month }) => {
+const creditCardUsage: Rule = ({ data, today, month }) => {
   const out: Insight[] = [];
   for (const account of data.accounts) {
     if (account.archived || account.type !== 'cartao_credito' || !account.creditLimit || account.creditLimit <= 0)
       continue;
-    const used = Math.max(0, -accountBalance(account, data.transactions, { includePending: true }));
+    // Fatura em aberto + parcelas futuras; o pagamento de fatura agendado não abate o limite antes de acontecer.
+    const used = cardCommitted(account, data.transactions, today);
     const ratio = used / account.creditLimit;
     if (ratio <= CARD_USAGE_LIMIT) continue;
     out.push({
@@ -557,7 +593,8 @@ const netWorthGrowth: Rule = ({ data, month, prevMonth }) => {
       severity: 'positivo',
       area: 'patrimonio',
       title: 'Patrimônio em alta',
-      message: `Seu patrimônio líquido cresceu ${formatBRL(diff)} em ${formatMonthLong(prevMonth)}: de ${formatBRL(before.netWorth)} para ${formatBRL(after.netWorth)}. É o resultado de poupar e reduzir dívidas — continue!`,
+      // Neutro de propósito: a alta pode vir de poupança, de dívidas pagas ou da valorização/venda de um bem.
+      message: `Seu patrimônio líquido cresceu ${formatBRL(diff)} em ${formatMonthLong(prevMonth)}: de ${formatBRL(before.netWorth)} para ${formatBRL(after.netWorth)}. Veja a evolução e a composição na tela de patrimônio.`,
       priority: 20,
       action: { label: 'Ver patrimônio', to: ROUTES.netWorth },
     },
@@ -737,8 +774,15 @@ export function generateInsights(data: FinanceData, today: ISODate): Insight[] {
   };
   const rules = hasAnyData(data) ? RULES : [dataQuality];
   const dismissed = data.settings.dismissedInsights ?? {};
-  return rules
-    .flatMap((rule) => rule(ctx))
+  const all = rules.flatMap((rule) => rule(ctx));
+  // Categoria já alertada pelo orçamento: "acima do normal" sobre o mesmo gasto é redundante.
+  const budgetAlerted = new Set(
+    all
+      .filter((i) => i.id.startsWith('orcamento-estourado:') || i.id.startsWith('orcamento-alerta:'))
+      .map((i) => i.id.split(':')[1]),
+  );
+  return all
+    .filter((insight) => !(insight.id.startsWith('gasto-acima-media:') && budgetAlerted.has(insight.id.split(':')[1])))
     .filter((insight) => dismissed[insight.id] !== month)
     .sort(
       (a, b) =>

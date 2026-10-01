@@ -1,4 +1,4 @@
-import type { Account, AccountType, Cents, ID, Transaction } from '@/domain/types';
+import type { Account, AccountType, Cents, ID, ISODate, Transaction } from '@/domain/types';
 import type { BalanceOptions } from './types';
 
 /**
@@ -108,4 +108,20 @@ export function liquidBalance(
   opts?: BalanceOptions,
 ): Cents {
   return sumBalances(accounts, transactions, opts, (a) => LIQUID_ACCOUNT_TYPES.includes(a.type));
+}
+
+/**
+ * Limite comprometido de um cartão de crédito: a fatura em aberto até `today` (saldo pago, só a parte negativa)
+ * + os lançamentos ainda por vir que DEBITAM o cartão (pendentes ou com data futura: parcelas, assinaturas).
+ * Créditos futuros — o pagamento da fatura agendado, estornos pendentes — NÃO abatem: o limite só é liberado
+ * quando o pagamento acontece. Assim o uso nunca fica abaixo da própria fatura em aberto.
+ */
+export function cardCommitted(account: Account, transactions: Transaction[], today: ISODate): Cents {
+  let committed = Math.max(0, -accountBalance(account, transactions, { asOf: today }));
+  for (const tx of transactions) {
+    if (tx.status === 'pago' && tx.date <= today) continue; // já está no saldo acima
+    const effect = transactionEffect(tx, account.id);
+    if (effect < 0) committed -= effect;
+  }
+  return committed;
 }

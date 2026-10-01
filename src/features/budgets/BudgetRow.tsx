@@ -13,7 +13,10 @@ const HEALTH_ICONS: Record<BudgetHealth, typeof CircleCheck> = {
 
 export interface BudgetRowProps {
   item: BudgetStatus;
-  /** Mostra a projeção para o fim do mês (somente no mês corrente). */
+  /**
+   * Mostra a projeção para o fim do mês (somente no mês corrente). Ela só aparece quando acrescenta algo ao gasto
+   * atual — nos primeiros dias do mês o ritmo ainda não é medido e projected = spent.
+   */
   showProjection: boolean;
   onEdit: (item: BudgetStatus) => void;
   onRemove: (item: BudgetStatus) => void;
@@ -54,7 +57,7 @@ export function BudgetRow({ item, showProjection, onEdit, onRemove }: BudgetRowP
             </Badge>
           </div>
           <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">
-            <Money value={item.spent} /> <span className="text-slate-400">de</span>{' '}
+            <Money value={item.spent} /> <span className="text-slate-500 dark:text-slate-400">de</span>{' '}
             <Money value={item.budgeted} />
           </p>
         </div>
@@ -95,7 +98,7 @@ export function BudgetRow({ item, showProjection, onEdit, onRemove }: BudgetRowP
         </span>
       </div>
 
-      {showProjection && (
+      {showProjection && item.projected !== item.spent && (
         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
           Projeção para o fim do mês: <Money value={item.projected} />
           {!over && projectedOver > 0 && (

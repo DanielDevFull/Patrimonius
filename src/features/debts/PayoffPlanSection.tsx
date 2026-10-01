@@ -9,6 +9,7 @@ import {
   defaultPayoffBudget,
   payoffAdvice,
   payoffChartRows,
+  payoffPlanStatus,
   type PayoffAdvice,
 } from './debt-utils';
 import { PayoffChart } from './PayoffChart';
@@ -32,6 +33,7 @@ function StrategyCard({
   today: ISODate;
 }) {
   const meta = STRATEGY_META[plan.strategy];
+  const status = payoffPlanStatus(plan);
   return (
     <section
       aria-label={`Estratégia ${meta.name}`}
@@ -84,7 +86,11 @@ function StrategyCard({
         </dl>
       ) : (
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          Com este orçamento, as dívidas não são quitadas em até 50 anos.
+          {status === 'abaixo_minimos'
+            ? 'Este valor não cobre as parcelas mínimas: na prática haverá atraso, multas e juros de mora (não simulados).'
+            : plan.payoffOrder.length > 0
+              ? 'Com este orçamento, nem todas as dívidas são quitadas em até 50 anos.'
+              : 'Com este orçamento, as dívidas não são quitadas em até 50 anos.'}
         </p>
       )}
 
@@ -94,11 +100,14 @@ function StrategyCard({
         <div>
           <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
             Ordem de quitação
+            {status === 'abaixo_minimos' && (
+              <span className="font-normal normal-case tracking-normal"> · estimativa sem multas e mora</span>
+            )}
           </h4>
           <ol className="space-y-1 text-sm">
             {plan.payoffOrder.map((p, i) => (
               <li key={p.debtId} className="flex gap-1.5">
-                <span className="text-slate-400">{i + 1}.</span>
+                <span className="text-slate-500 dark:text-slate-400">{i + 1}.</span>
                 <span className="min-w-0">
                   <span className="block break-words">{p.name}</span>
                   <span className="block text-xs text-slate-500 dark:text-slate-400">

@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '@/db/db';
-import { addAccount, addRecurring, addTransaction } from '@/db/repo';
+import { addAccount, addRecurring, addTransaction, setTransactionStatus } from '@/db/repo';
 import { CATEGORY_IDS } from '@/domain/defaults';
 import type { Account, RecurringRule } from '@/domain/types';
 import { renderWithProviders, resetDb } from '@/test/render';
@@ -118,7 +118,7 @@ describe('RecurringPage', () => {
     expect(ruleRow('Aluguel').getByText('Próxima: 01/11/2026')).toBeInTheDocument();
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole('tab', { name: 'Receitas' }));
+    await user.click(screen.getByRole('radio', { name: 'Receitas' }));
     expect(screen.getByText('Salário', { selector: 'span' })).toBeInTheDocument();
     expect(screen.queryByText('Aluguel', { selector: 'span' })).not.toBeInTheDocument();
   });
@@ -189,6 +189,93 @@ describe('RecurringPage', () => {
     expect((await db.recurring.get(rule.id))?.amount).toBe(10990);
     const [tx] = await db.transactions.toArray();
     expect(tx).toMatchObject({ amount: 10990, date: '2026-10-20', status: 'pendente' });
+  });
+
+  it('mudar o dia de início refaz o pendente do mês na nova data, sem duplicar a conta do mês', async () => {
+    const banco = await seedAccount();
+    const rule = await seedRule(banco.id, {
+      description: 'Internet',
+      categoryId: CATEGORY_IDS.contas,
+      amount: 9990,
+      startDate: '2026-08-10',
+    });
+    const generated = await db.transactions.where('recurringId').equals(rule.id).sortBy('date');
+    expect(generated.map((t) => t.date)).toEqual(['2026-08-10', '2026-09-10', '2026-10-10']);
+    await setTransactionStatus(generated[0].id, 'pago');
+    await setTransactionStatus(generated[1].id, 'pago');
+
+    const user = await renderPage();
+    await user.click(await screen.findByText('Internet', { selector: 'span' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Editar recorrência' }));
+    fireEvent.change(dialog.getByLabelText('Início'), { target: { value: '2026-08-15' } });
+    await user.click(dialog.getByRole('button', { name: 'Salvar' }));
+    expect(
+      await screen.findByText(
+        'Recorrência atualizada. O lançamento pendente da agenda antiga foi substituído pela nova data.',
+      ),
+    ).toBeInTheDocument();
+
+    const after = await db.transactions.where('recurringId').equals(rule.id).sortBy('date');
+    expect(after.map((t) => `${t.date}:${t.status}`)).toEqual([
+      '2026-08-10:pago',
+      '2026-09-10:pago',
+      '2026-10-15:pendente',
+    ]);
+    expect(await db.recurring.get(rule.id)).toMatchObject({
+      startDate: '2026-08-15',
+      nextDate: '2026-11-15',
+    });
+  });
+
+  it('mudar o dia de início quando a conta do mês já foi paga começa a nova agenda no mês seguinte', async () => {
+    const banco = await seedAccount();
+    const rule = await seedRule(banco.id, {
+      description: 'Internet',
+      categoryId: CATEGORY_IDS.contas,
+      amount: 9990,
+      startDate: '2026-08-10',
+    });
+    for (const t of await db.transactions.where('recurringId').equals(rule.id).toArray()) {
+      await setTransactionStatus(t.id, 'pago');
+    }
+    const user = await renderPage();
+    await user.click(await screen.findByText('Internet', { selector: 'span' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Editar recorrência' }));
+    fireEvent.change(dialog.getByLabelText('Início'), { target: { value: '2026-08-15' } });
+    await user.click(dialog.getByRole('button', { name: 'Salvar' }));
+    expect(await screen.findByText('Recorrência atualizada.')).toBeInTheDocument();
+
+    const after = await db.transactions.where('recurringId').equals(rule.id).sortBy('date');
+    expect(after.map((t) => `${t.date}:${t.status}`)).toEqual([
+      '2026-08-10:pago',
+      '2026-09-10:pago',
+      '2026-10-10:pago',
+    ]);
+    expect((await db.recurring.get(rule.id))?.nextDate).toBe('2026-11-15');
+  });
+
+  it('definir o término exclui os pendentes já gerados depois dele', async () => {
+    const banco = await seedAccount();
+    const rule = await seedRule(banco.id, {
+      description: 'Netflix',
+      categoryId: CATEGORY_IDS.assinaturas,
+      amount: 3990,
+      startDate: '2026-09-14',
+    });
+    const user = await renderPage();
+    await user.click(await screen.findByText('Netflix', { selector: 'span' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Editar recorrência' }));
+    fireEvent.change(dialog.getByLabelText('Término (opcional)'), { target: { value: '2026-10-05' } });
+    await user.click(dialog.getByRole('button', { name: 'Salvar' }));
+    expect(
+      await screen.findByText(
+        'Recorrência atualizada (e 1 lançamento pendente). 1 lançamento pendente depois do término foi excluído.',
+      ),
+    ).toBeInTheDocument();
+
+    const after = await db.transactions.where('recurringId').equals(rule.id).sortBy('date');
+    expect(after.map((t) => `${t.date}:${t.status}`)).toEqual(['2026-09-14:pendente']);
+    expect((await db.recurring.get(rule.id))?.endDate).toBe('2026-10-05');
   });
 
   it('pausar mantém os lançamentos; reativar não gera os meses em que ficou pausada', async () => {
@@ -274,6 +361,11 @@ describe('RecurringPage', () => {
     const user = await renderPage();
     expect(await screen.findByText('Detectamos possíveis recorrências')).toBeInTheDocument();
     expect(screen.getByText(/4 ocorrências • última em 08\/10\/2026/)).toBeInTheDocument();
+    // Celular: a coluna de texto tem largura mínima (o flex-wrap leva valor e “Cadastrar” para a linha de baixo)
+    // e o nome não é truncado. Antes (`min-w-0 flex-1` + `truncate`) o nome virava “P…” em 360 px.
+    const name = screen.getByText('Netflix', { selector: 'p' });
+    expect(name).not.toHaveClass('truncate');
+    expect(name.parentElement).toHaveClass('basis-48', 'min-w-[min(100%,12rem)]');
     await user.click(screen.getByRole('button', { name: 'Cadastrar Netflix como recorrência' }));
 
     const dialog = within(await screen.findByRole('dialog', { name: 'Nova recorrência' }));
@@ -290,5 +382,10 @@ describe('RecurringPage', () => {
       expect(screen.queryByText('Detectamos possíveis recorrências')).not.toBeInTheDocument(),
     );
     expect(ruleRow('Netflix').getByText('Próxima: 08/11/2026')).toBeInTheDocument();
+    // “Suas recorrências” no celular: nome em até 2 linhas e metadados quebrando a linha (antes: `truncate`, ~80 px).
+    const ruleName = screen.getByText('Netflix', { selector: 'span' });
+    expect(ruleName).toHaveClass('line-clamp-2');
+    expect(ruleName).not.toHaveClass('truncate');
+    expect(ruleRow('Netflix').getByText(/Assinaturas • Banco • Mensal/)).not.toHaveClass('truncate');
   });
 });

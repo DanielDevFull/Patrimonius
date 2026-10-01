@@ -38,14 +38,17 @@ describe('goalTemplates', () => {
 });
 
 describe('monthlyPlan', () => {
-  it('divide o que falta pelos meses até o prazo (arredondando para cima)', () => {
-    expect(monthlyPlan(1000000, 0, '2027-04-30', TODAY)).toEqual({ months: 6, monthly: 166667 });
-    expect(monthlyPlan(1000000, 400000, '2027-04-01', TODAY)).toEqual({ months: 6, monthly: 100000 });
+  it('divide o que falta pelos meses de aporte até o prazo, contando o mês atual (arredondando para cima)', () => {
+    // out/26 a abr/27 = 7 meses (sem aporte em outubro ainda).
+    expect(monthlyPlan(1000000, 0, '2027-04-30', TODAY)).toEqual({ months: 7, monthly: 142858 });
+    // Já aportou neste mês: restam nov a abr.
+    expect(monthlyPlan(1000000, 400000, '2027-04-01', TODAY, true)).toEqual({ months: 6, monthly: 100000 });
   });
 
   it('prazo no mês atual conta como 1 mês; já atingido => 0', () => {
     expect(monthlyPlan(50000, 0, '2026-10-31', TODAY)).toEqual({ months: 1, monthly: 50000 });
-    expect(monthlyPlan(50000, 80000, '2027-01-31', TODAY)).toEqual({ months: 3, monthly: 0 });
+    expect(monthlyPlan(50000, 0, '2026-10-31', TODAY, true)).toEqual({ months: 1, monthly: 50000 });
+    expect(monthlyPlan(50000, 80000, '2027-01-31', TODAY)).toEqual({ months: 4, monthly: 0 });
   });
 
   it('null sem alvo, sem prazo, prazo inválido ou no passado', () => {
@@ -61,6 +64,9 @@ describe('monthlyPlan', () => {
     const contributions = [makeContribution({ goalId: goal.id, amount: 34567, date: '2026-09-01' })];
     const p = goalProgress(goal, contributions, TODAY);
     expect(monthlyPlan(goal.targetAmount, p.saved, goal.targetDate, TODAY)?.monthly).toBe(p.requiredMonthly);
+    const withOctober = [...contributions, makeContribution({ goalId: goal.id, amount: 10000, date: '2026-10-02' })];
+    const q = goalProgress(goal, withOctober, TODAY);
+    expect(monthlyPlan(goal.targetAmount, q.saved, goal.targetDate, TODAY, true)?.monthly).toBe(q.requiredMonthly);
   });
 });
 
@@ -155,11 +161,13 @@ describe('aportes', () => {
 
 describe('coachTip', () => {
   it('sugere o aporte extra quando a meta está atrasada', () => {
-    const goal = makeGoal({ targetAmount: 120000, targetDate: '2027-04-30' }); // 6 meses => 20.000/mês
-    const contributions = [makeContribution({ goalId: goal.id, amount: 30000, date: '2026-10-01' })]; // média 10.000
+    // Criada em julho; só um aporte de 30.000 (em outubro) => média 7.500 em jul–out; faltam 90.000 em 6 meses.
+    const goal = makeGoal({ targetAmount: 120000, targetDate: '2027-04-30', createdAt: '2026-07-01T12:00:00.000Z' });
+    const contributions = [makeContribution({ goalId: goal.id, amount: 30000, date: '2026-10-01' })];
     const p = goalProgress(goal, contributions, TODAY);
     expect(p.track).toBe('atrasada');
-    expect(coachTip(p)).toEqual({ kind: 'atrasada', extraMonthly: (p.requiredMonthly ?? 0) - 10000 });
+    expect(p.requiredMonthly).toBe(15000);
+    expect(coachTip(p)).toEqual({ kind: 'atrasada', extraMonthly: 15000 - 7500 });
   });
 
   it('cobre vencida, no ritmo, sem prazo (com e sem ritmo) e nada para concluída/pausada', () => {
@@ -179,9 +187,18 @@ describe('coachTip', () => {
     );
     expect(coachTip(comRitmo)).toEqual({ kind: 'sem_prazo_com_ritmo', date: comRitmo.projectedCompletionDate });
 
+    // Meta criada neste mês, sem aportes: não está atrasada, mas a dica é de como começar (60.000 em 7 meses).
     const nova = goalProgress(makeGoal({ targetAmount: 60000, targetDate: '2027-04-30' }), [], TODAY);
-    expect(nova.track).toBe('atrasada');
-    expect(coachTip(nova)).toEqual({ kind: 'comecar', monthly: 10000 });
+    expect(nova.track).toBe('no_ritmo');
+    expect(coachTip(nova)).toEqual({ kind: 'comecar', monthly: 8572 });
+    // Criada há meses e nunca recebeu aporte: atrasada, com a mesma dica de começar.
+    const parada = goalProgress(
+      makeGoal({ targetAmount: 60000, targetDate: '2027-04-30', createdAt: '2026-06-01T12:00:00.000Z' }),
+      [],
+      TODAY,
+    );
+    expect(parada.track).toBe('atrasada');
+    expect(coachTip(parada)).toEqual({ kind: 'comecar', monthly: 8572 });
 
     expect(coachTip(goalProgress(makeGoal({ status: 'pausada' }), [], TODAY))).toBeNull();
     expect(coachTip(goalProgress(makeGoal({ status: 'concluida' }), [], TODAY))).toBeNull();

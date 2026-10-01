@@ -94,3 +94,18 @@ describe('extractDate', () => {
     expect(extractDate('ontem ou hoje?', TODAY)?.match).toBe('ontem');
   });
 });
+
+describe('extractDate — regressões', () => {
+  it('"dia 20/09" inclui o "dia" no trecho', () => {
+    expect(extractDate('gastei 80 dia 20/09', TODAY)).toEqual({ date: '2026-09-20', match: 'dia 20/09' });
+  });
+
+  it.each([
+    ['na 2ª feira', '2026-09-28'],
+    ['na 3ª feira', '2026-09-29'],
+    ['na 3a feira', '2026-09-29'],
+    ['na 6ª-feira passada', '2026-09-25'],
+  ])('dia da semana numerado: %s', (text, date) => {
+    expect(extractDate(text, TODAY)?.date).toBe(date);
+  });
+});

@@ -21,15 +21,26 @@ export function useChatMessages(): ChatMessage[] | undefined {
   return useLiveQuery(() => db.chat.orderBy('createdAt').toArray(), []);
 }
 
-/** Data de hoje ('YYYY-MM-DD'), atualizada automaticamente na virada do dia. */
+/**
+ * Data de hoje ('YYYY-MM-DD'), atualizada automaticamente na virada do dia — e na hora em que a aba volta a ficar
+ * visível (no celular os timers ficam suspensos em segundo plano).
+ */
 export function useToday(): ISODate {
   const [today, setToday] = useState(() => todayISO());
   useEffect(() => {
-    const id = window.setInterval(() => {
+    const update = () => {
       const t = todayISO();
       setToday((prev) => (prev === t ? prev : t));
-    }, 60_000);
-    return () => window.clearInterval(id);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') update();
+    };
+    const id = window.setInterval(update, 60_000);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
   return today;
 }

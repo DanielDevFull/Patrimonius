@@ -1,7 +1,7 @@
-import { addMonthsToKey, isInMonth, lastMonths, monthKey } from '@/domain/dates';
-import { CATEGORY_IDS } from '@/domain/defaults';
+import { addMonthsToKey, daysInMonthKey, isBetween, isInMonth, isISODate, lastMonths, monthKey, parseISO } from '@/domain/dates';
+import { CATEGORY_IDS, RULE_50_30_20 } from '@/domain/defaults';
 import { safeRatio } from '@/domain/money';
-import type { Category, CategoryKind, Cents, ID, MonthKey, Transaction } from '@/domain/types';
+import type { Category, CategoryKind, Cents, FinanceData, ID, ISODate, MonthKey, Transaction } from '@/domain/types';
 import {
   UNCATEGORIZED,
   addTo,
@@ -140,12 +140,49 @@ export function categoryBreakdown(
   kind: CategoryKind,
   opts?: SummaryOptions,
 ): CategoryTotal[] {
+  return aggregateByCategory(transactions, categories, kind, opts, (tx) => isInMonth(tx.date, month));
+}
+
+export interface RangeBreakdownOptions extends SummaryOptions {
+  /** Só lançamentos desta conta. */
+  accountId?: ID;
+}
+
+/**
+ * Igual a categoryBreakdown, para um intervalo qualquer de datas (start..end, inclusive) — ex.: "últimos 7 dias"
+ * ou "no Nubank em outubro". Mesmas regras de agrupamento, pendentes e desempate (total desc, nome em pt-BR).
+ */
+export function categoryBreakdownInRange(
+  transactions: Transaction[],
+  categories: Category[],
+  start: ISODate,
+  end: ISODate,
+  kind: CategoryKind,
+  opts?: RangeBreakdownOptions,
+): CategoryTotal[] {
+  const accountId = opts?.accountId;
+  return aggregateByCategory(
+    transactions,
+    categories,
+    kind,
+    opts,
+    (tx) => isBetween(tx.date, start, end) && (accountId === undefined || tx.accountId === accountId),
+  );
+}
+
+function aggregateByCategory(
+  transactions: Transaction[],
+  categories: Category[],
+  kind: CategoryKind,
+  opts: SummaryOptions | undefined,
+  include: (tx: Transaction) => boolean,
+): CategoryTotal[] {
   const includePending = opts?.includePending ?? true;
   const byId = indexCategories(categories);
   const totals = new Map<ID | null, { total: Cents; count: number }>();
   let grandTotal = 0;
   for (const tx of transactions) {
-    if (tx.type !== kind || !isInMonth(tx.date, month) || !statusIncluded(tx, includePending)) continue;
+    if (tx.type !== kind || !statusIncluded(tx, includePending) || !include(tx)) continue;
     const key = groupKey(tx, byId);
     const entry = totals.get(key) ?? { total: 0, count: 0 };
     entry.total += tx.amount;
@@ -188,29 +225,96 @@ export function categoryTrend(
   return months.map((month) => ({ month, total: totals.get(month) ?? 0 }));
 }
 
-/** Média mensal de um tipo de lançamento nos `months` meses anteriores a `beforeMonth`, ignorando meses vazios. */
+/** Dias mínimos considerados no mês em que o registro começou (evita extrapolar 1 ou 2 dias de gastos para o mês). */
+const MIN_COVERED_DAYS = 7;
+/** Começar a registrar até este dia do mês conta como mês completo (poucos dias sem gasto são normais). */
+const FULL_MONTH_START_DAY = 7;
+
+/** Despesa variável: não veio de recorrência nem de parcelamento (valor fixo não se repete no mês). */
+function isVariableExpense(tx: Transaction): boolean {
+  return tx.type === 'despesa' && tx.recurringId === null && tx.installment === null;
+}
+
+/**
+ * Início do registro de despesas, para não tratar como completo o mês em que o usuário começou a usar o app:
+ * - normalmente, a data de criação da conta mais antiga (createdAt, data UTC) — ex.: instalou em 20/09, lançou o
+ *   salário do dia 05/09 e passou a registrar os gastos a partir do dia 20 => 20/09;
+ * - se houver despesas anteriores a ela (lançamentos retroativos), a data do lançamento (receita ou despesa) mais
+ *   antigo, de onde o próprio usuário decidiu começar o histórico.
+ * undefined sem contas e sem lançamentos. Ver monthCoverage.
+ */
+export function expenseTrackingStart(data: Pick<FinanceData, 'accounts' | 'transactions'>): ISODate | undefined {
+  let accountsSince: ISODate | undefined;
+  for (const account of data.accounts) {
+    const created = account.createdAt.slice(0, 10);
+    if (isISODate(created) && (accountsSince === undefined || created < accountsSince)) accountsSince = created;
+  }
+  let firstExpense: ISODate | undefined;
+  let firstFlow: ISODate | undefined;
+  for (const tx of data.transactions) {
+    if (!isFlow(tx)) continue;
+    if (firstFlow === undefined || tx.date < firstFlow) firstFlow = tx.date;
+    if (tx.type === 'despesa' && (firstExpense === undefined || tx.date < firstExpense)) firstExpense = tx.date;
+  }
+  if (firstExpense !== undefined && (accountsSince === undefined || firstExpense < accountsSince)) return firstFlow;
+  return accountsSince;
+}
+
+/**
+ * Fração (0..1] de `month` coberta pelo registro de despesas: 1, salvo no mês de `trackingStart` quando ele começou
+ * depois do dia 7 — aí vale max(dias de trackingStart até o fim do mês, 7) / dias do mês. Ex.: começou em 20/09 => 11/30.
+ */
+export function monthCoverage(month: MonthKey, trackingStart?: ISODate): number {
+  if (trackingStart === undefined || monthKey(trackingStart) !== month) return 1;
+  const day = parseISO(trackingStart).day;
+  if (day <= FULL_MONTH_START_DAY) return 1;
+  const days = daysInMonthKey(month);
+  return Math.min(1, Math.max(days - day + 1, MIN_COVERED_DAYS) / days);
+}
+
+interface AverageOptions {
+  /** Só estas categorias (um mês com lançamentos em outras categorias entra com 0). */
+  categoryIds?: ID[];
+  /** Ignora estas categorias. */
+  excludeCategoryIds?: ID[];
+  /** Início do registro de despesas (ver expenseTrackingStart e monthCoverage). */
+  trackingStart?: ISODate;
+}
+
+/**
+ * Média mensal de um tipo de lançamento nos `months` meses anteriores a `beforeMonth`, ignorando meses vazios.
+ * Com `trackingStart`, as despesas VARIÁVEIS do mês em que o registro começou são extrapoladas para o mês inteiro
+ * (÷ monthCoverage); despesas fixas (recorrência/parcela) e receitas (ex.: salário) nunca são escaladas.
+ */
 function averageMonthly(
   transactions: Transaction[],
   type: 'despesa' | 'receita',
   beforeMonth: MonthKey,
   months: number,
-  categoryIds?: ID[],
+  opts: AverageOptions = {},
 ): Cents {
   if (months <= 0) return 0;
   const window = new Set(lastMonths(addMonthsToKey(beforeMonth, -1), Math.floor(months)));
-  const filter = categoryIds ? new Set(categoryIds) : null;
+  const include = opts.categoryIds ? new Set(opts.categoryIds) : null;
+  const exclude = opts.excludeCategoryIds ? new Set(opts.excludeCategoryIds) : null;
+  const partialMonth = type === 'despesa' && opts.trackingStart ? monthKey(opts.trackingStart) : null;
   const activeMonths = new Set<MonthKey>();
   let total = 0;
+  let partialVariable = 0;
   for (const tx of transactions) {
     if (!isFlow(tx)) continue;
     const key = monthKey(tx.date);
     if (!window.has(key)) continue;
     activeMonths.add(key);
     if (tx.type !== type) continue;
-    if (filter && (tx.categoryId === null || !filter.has(tx.categoryId))) continue;
-    total += tx.amount;
+    if (include && (tx.categoryId === null || !include.has(tx.categoryId))) continue;
+    if (exclude && tx.categoryId !== null && exclude.has(tx.categoryId)) continue;
+    if (key === partialMonth && isVariableExpense(tx)) partialVariable += tx.amount;
+    else total += tx.amount;
   }
-  return activeMonths.size > 0 ? Math.round(total / activeMonths.size) : 0;
+  if (activeMonths.size === 0) return 0;
+  if (partialMonth !== null) total += partialVariable / monthCoverage(partialMonth, opts.trackingStart);
+  return Math.round(total / activeMonths.size);
 }
 
 /**
@@ -218,17 +322,20 @@ function averageMonthly(
  * Meses sem nenhum lançamento (nem receita nem despesa) são ignorados na média; se nenhum mês tiver dados, retorna 0.
  * Se `categoryIds` for informado, considera só essas categorias (um mês com lançamentos em outras categorias
  * conta como mês com dados e entra com 0 na média). Pagos e pendentes entram; resultado arredondado ao centavo.
+ * Com `trackingStart` (ver expenseTrackingStart), o mês em que o usuário começou a registrar não dilui a média:
+ * suas despesas variáveis são extrapoladas pela fração do mês coberta (monthCoverage).
  */
 export function averageMonthlyExpense(
   transactions: Transaction[],
   beforeMonth: MonthKey,
   months: number,
   categoryIds?: ID[],
+  trackingStart?: ISODate,
 ): Cents {
-  return averageMonthly(transactions, 'despesa', beforeMonth, months, categoryIds);
+  return averageMonthly(transactions, 'despesa', beforeMonth, months, { categoryIds, trackingStart });
 }
 
-/** Igual a averageMonthlyExpense, para receitas. */
+/** Igual a averageMonthlyExpense, para receitas (nunca extrapoladas: o salário cai uma vez por mês). */
 export function averageMonthlyIncome(
   transactions: Transaction[],
   beforeMonth: MonthKey,
@@ -238,8 +345,29 @@ export function averageMonthlyIncome(
 }
 
 /**
+ * Sobra mensal média nos `months` meses anteriores a `beforeMonth`: média de (receitas − despesas + investido),
+ * ou seja, aportes na categoria Investimentos e reserva (CATEGORY_IDS.investimentos) NÃO contam como gasto — é
+ * dinheiro poupado, como em MonthSummary.savingsRate. Mesmas regras de averageMonthlyExpense (meses vazios
+ * ignorados, `trackingStart` para o primeiro mês parcial).
+ */
+export function averageMonthlySurplus(
+  transactions: Transaction[],
+  beforeMonth: MonthKey,
+  months: number,
+  trackingStart?: ISODate,
+): Cents {
+  return (
+    averageMonthly(transactions, 'receita', beforeMonth, months) -
+    averageMonthly(transactions, 'despesa', beforeMonth, months, {
+      excludeCategoryIds: [CATEGORY_IDS.investimentos],
+      trackingStart,
+    })
+  );
+}
+
+/**
  * Distribuição das despesas do mês nos grupos da regra 50/30/20 (pagos + pendentes).
- * `ideal` = 50%/30%/20% da renda do mês, cada valor arredondado ao centavo.
+ * `ideal` = RULE_50_30_20 (50%/30%/20%) da renda do mês, cada valor arredondado ao centavo.
  */
 export function groupBreakdown(
   transactions: Transaction[],
@@ -277,9 +405,9 @@ export function groupBreakdown(
       objetivos: safeRatio(objetivos, income),
     },
     ideal: {
-      necessidades: Math.round(income * 0.5),
-      desejos: Math.round(income * 0.3),
-      objetivos: Math.round(income * 0.2),
+      necessidades: Math.round(income * RULE_50_30_20.necessidades),
+      desejos: Math.round(income * RULE_50_30_20.desejos),
+      objetivos: Math.round(income * RULE_50_30_20.objetivos),
     },
   };
 }

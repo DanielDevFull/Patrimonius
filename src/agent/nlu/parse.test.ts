@@ -563,3 +563,265 @@ describe('parseMessage — continuação e desconhecido', () => {
     expect(parse('gastei 45,90 no ifood ontem')).toEqual(parse('gastei 45,90 no ifood ontem'));
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* Regressões da revisão do agente                                    */
+/* ------------------------------------------------------------------ */
+
+const AUGUST = { start: '2026-08-01', end: '2026-08-31', label: 'agosto de 2026' };
+
+describe('parseMessage — regressões: correção ortográfica não troca palavras comuns', () => {
+  it('"maior" não vira "maio" e "maior gasto" é maiores_gastos sem período', () => {
+    expect(parse('qual meu maior gasto?')).toMatchObject({ intent: 'maiores_gastos', entities: {} });
+    expect(parse('qual meu maior gasto?').entities.period).toBeUndefined();
+    expectCase(['qual foi meu maior gasto este mês?', 'maiores_gastos', { period: THIS_MONTH }]);
+    const r = expectCase(['maior despesa do mês', 'maiores_gastos', { period: THIS_MONTH }]);
+    expect(r.entities.categoryId).toBeUndefined();
+  });
+
+  it('"junto" não vira "junho"; "vender" não vira "vencer"', () => {
+    const r = parse('quanto gastamos junto?');
+    expect(r.intent).toBe('consultar_gastos');
+    expect(r.entities.period).toBeUndefined();
+    expect(parse('quero vender meu carro').intent).not.toBe('contas_a_pagar');
+  });
+
+  it('"recebo 9650 dia 5" (hábito no presente) não vira receita registrada', () => {
+    const r = parse('recebo 9650 dia 5');
+    expect(r.intent).not.toBe('registrar_receita');
+    expect(r.entities).toMatchObject({ amount: 965000, habitual: true });
+  });
+});
+
+describe('parseMessage — regressões: "despesas"/"receitas" genéricas', () => {
+  it.each<Case>([
+    ['despesas do mes passado', 'consultar_gastos', { period: LAST_MONTH }],
+    ['minhas despesas', 'consultar_gastos'],
+    ['total de despesas este mês', 'consultar_gastos', { period: THIS_MONTH }],
+    ['receitas do mês passado', 'consultar_receitas', { period: LAST_MONTH }],
+    ['quais minhas receitas?', 'consultar_receitas'],
+  ])('%s => sem filtrar "Outras despesas/receitas"', (...c) => {
+    expect(expectCase(c).entities.categoryId).toBeUndefined();
+  });
+});
+
+describe('parseMessage — regressões: pagamento de fatura', () => {
+  it('valor entre o verbo e "fatura" continua sendo pagamento (transferência), não despesa no cartão', () => {
+    expectCase([
+      'paguei 3907,96 da fatura do cartão',
+      'registrar_transferencia',
+      { amount: 390796, accountId: 'acc-corrente', toAccountId: 'acc-nubank' },
+    ]);
+  });
+
+  it('"paguei a fatura" sem valor abre o registro do pagamento', () => {
+    const r = expectCase(['paguei a fatura', 'registrar_transferencia', { toAccountId: 'acc-nubank' }]);
+    expect(r.entities.amount).toBeUndefined();
+  });
+
+  it('"fatura" longe do verbo não transforma uma compra em pagamento', () => {
+    expect(parse('paguei 50 no uber, vai pra fatura de novembro').intent).toBe('registrar_despesa');
+  });
+});
+
+describe('parseMessage — regressões: "N x de V" é o valor da parcela', () => {
+  it.each<Case>([
+    ['comprei um fone em 10x de 50', 'registrar_despesa', { amount: 50000, installments: 10 }],
+    ['parcelei o celular em 12x de 100', 'registrar_despesa', { amount: 120000, installments: 12 }],
+    ['comprei uma tv em 10 parcelas de 300', 'registrar_despesa', { amount: 300000, installments: 10 }],
+    ['comprei uma tv de 3 mil em 10x de 300', 'registrar_despesa', { amount: 300000, installments: 10 }],
+  ])('%s', (...c) => {
+    expectCase(c);
+  });
+});
+
+describe('parseMessage — regressões: pedidos de registro sem valor', () => {
+  it.each<Case>([
+    ['recebi o salário', 'registrar_receita', { categoryId: CATEGORY_IDS.salario }],
+    ['recebi um freela', 'registrar_receita'],
+    ['transferi pra poupança', 'registrar_transferencia', { accountId: 'acc-corrente', toAccountId: 'acc-poupanca' }],
+    ['definir orçamento para mercado', 'definir_orcamento', { categoryId: CATEGORY_IDS.mercado }],
+    ['guardei na meta viagem', 'aportar_meta', { goalId: 'goal-viagem' }],
+  ])('%s', (...c) => {
+    expect(expectCase(c).entities.amount).toBeUndefined();
+  });
+
+  it('perguntas continuam sendo consultas', () => {
+    expect(parse('recebi o salário este mês?').intent).toBe('consultar_receitas');
+    expect(parse('quanto falta guardar na meta viagem?').intent).toBe('status_metas');
+  });
+});
+
+describe('parseMessage — regressões: ordinais e dias da semana numerados', () => {
+  it.each<Case>([
+    ['recebi o 13º salário de 4800', 'registrar_receita', { amount: 480000, categoryId: CATEGORY_IDS.salario }],
+    ['recebi o 13º de 4800', 'registrar_receita', { amount: 480000 }],
+    ['caiu a 1ª parcela do 13º 2400', 'registrar_receita', { amount: 240000 }],
+  ])('%s', (...c) => {
+    expectCase(c);
+  });
+
+  it('"3ª feira" é terça-feira (data), não "feira" (Mercado)', () => {
+    const r = expectCase(['paguei 30 na 3ª feira', 'registrar_despesa', { amount: 3000, date: '2026-09-29' }]);
+    expect(r.entities.categoryId).not.toBe(CATEGORY_IDS.mercado);
+  });
+});
+
+describe('parseMessage — regressões: quantidade antes do preço', () => {
+  it.each<Case>([
+    ['comprei 2 pizzas de 40', 'registrar_despesa', { amount: 4000, quantity: 2, description: 'pizzas' }],
+    ['comprei 3 cervejas por 15', 'registrar_despesa', { amount: 1500, quantity: 3 }],
+    ['2 cafés de 8', 'registrar_despesa', { amount: 800, quantity: 2 }],
+  ])('%s', (...c) => {
+    expectCase(c);
+  });
+
+  it('"gastei 50 no mercado" não é quantidade', () => {
+    expect(parse('gastei 50 no mercado e 30 na farmácia').entities).toMatchObject({ amount: 5000 });
+    expect(parse('gastei 50 no mercado').entities.quantity).toBeUndefined();
+  });
+});
+
+describe('parseMessage — regressões: comparação entre dois meses citados', () => {
+  it('"compara setembro com agosto" guarda os dois meses (o mais antigo em period)', () => {
+    expectCase(['compara setembro com agosto', 'comparar_meses', { period: AUGUST, comparePeriod: SEPTEMBER }]);
+    expectCase(['agosto vs setembro', 'comparar_meses', { period: AUGUST, comparePeriod: SEPTEMBER }]);
+  });
+
+  it('um mês só continua sem comparePeriod', () => {
+    expect(parse('compara com o mês passado').entities.comparePeriod).toBeUndefined();
+  });
+});
+
+describe('parseMessage — regressões: fatura, limite e dívida do cartão', () => {
+  it.each(['qual a fatura do cartão?', 'quanto está a fatura?', 'fatura do cartão', 'quanto deu a fatura?', 'quanto tenho de limite no cartão?', 'limite do cartão', 'quanto devo no cartão?', 'estou devendo no cartão', 'quando vence a fatura?'])(
+    '%s => consultar_saldo do cartão',
+    (text) => {
+      expect(parse(text)).toMatchObject({ intent: 'consultar_saldo', entities: { accountId: 'acc-nubank' } });
+    },
+  );
+
+  it('"limite" sem cartão continua sendo orçamento', () => {
+    expect(parse('qual o limite de mercado?').intent).toBe('status_orcamento');
+  });
+});
+
+describe('parseMessage — regressões: datas', () => {
+  it('"gastei 80 dia 20/09": "dia" faz parte da data e o valor não some', () => {
+    const r = expectCase(['gastei 80 dia 20/09', 'registrar_despesa', { amount: 8000, date: '2026-09-20' }]);
+    expect(r.entities.description).toBeUndefined();
+  });
+
+  it.each<[string, string]>([
+    ['gastei 300 no mercado mês passado', '2026-09-30'],
+    ['gastei 300 no mercado em setembro', '2026-09-30'],
+    ['gastei 300 no mercado semana passada', '2026-09-27'],
+    ['almocei por 32 reais semana passada', '2026-09-27'],
+  ])('período passado no registro vira data aproximada: %s', (text, date) => {
+    expect(parse(text).entities).toMatchObject({ date, dateApprox: true });
+  });
+
+  it('mês como complemento ("aluguel de setembro") não vira data', () => {
+    const r = parse('paguei 2200 do aluguel de setembro');
+    expect(r.entities.date).toBeUndefined();
+    expect(r.entities.dateApprox).toBeUndefined();
+  });
+});
+
+describe('parseMessage — regressões: vários lançamentos, retiradas e centavos', () => {
+  it('o segundo lançamento sai da descrição/categoria e vai para otherEntries', () => {
+    expectCase([
+      'gastei 50 no mercado e 30 na farmácia',
+      'registrar_despesa',
+      { amount: 5000, categoryId: CATEGORY_IDS.mercado, description: 'mercado', otherEntries: ['30 na farmácia'] },
+    ]);
+    expectCase([
+      'gastei 50 no mercado ontem e hoje 30 no uber',
+      'registrar_despesa',
+      { amount: 5000, date: '2026-09-30', description: 'mercado', otherEntries: ['hoje 30 no uber'] },
+    ]);
+  });
+
+  it.each<Case>([
+    ['tirei 200 da poupança', 'registrar_transferencia', { amount: 20000, accountId: 'acc-poupanca', toAccountId: 'acc-corrente' }],
+    ['puxei 100 da poupança pra conta', 'registrar_transferencia', { amount: 10000, accountId: 'acc-poupanca', toAccountId: 'acc-corrente' }],
+    ['retirei 50 da carteira pra corrente', 'registrar_transferencia', { accountId: 'acc-carteira', toAccountId: 'acc-corrente' }],
+  ])('%s', (...c) => {
+    expectCase(c);
+  });
+
+  it.each<[string, number, string | undefined]>([
+    ['gastei 45 reais e 90 centavos no mercado', 4590, 'mercado'],
+    ['gastei 45 reais com 90 centavos', 4590, undefined],
+    ['gastei 50 reais e 30 centavos na farmácia', 5030, 'farmácia'],
+    ['gastei cinquenta reais e trinta centavos na farmácia', 5030, 'farmácia'],
+  ])('centavos por extenso: %s', (text, amount, description) => {
+    const r = parse(text);
+    expect(r.entities.amount).toBe(amount);
+    expect(r.entities.description).toBe(description);
+  });
+});
+
+describe('parseMessage — regressões: categorias, termos e descrições', () => {
+  it('"conta" isolada não é a categoria Contas da casa', () => {
+    expect(parse('me conta uma piada').entities.categoryId).toBeUndefined();
+    expect(parse('tenho dinheiro pra pagar as contas?').intent).toBe('contas_a_pagar');
+    expect(parse('paguei 120 da conta de luz').entities.categoryId).toBe(CATEGORY_IDS.contas);
+  });
+
+  it('"conserto do carro" é Transporte (o veículo vence o serviço)', () => {
+    expect(parse('gastei 2 mil no conserto do carro').entities.categoryId).toBe(CATEGORY_IDS.transporte);
+    expect(parse('paguei 300 no conserto do chuveiro').entities.categoryId).toBe(CATEGORY_IDS.moradia);
+  });
+
+  it('estabelecimento citado na consulta vira termo; o nome da categoria não', () => {
+    expect(parse('quanto gastei com ifood?').entities).toMatchObject({ categoryId: CATEGORY_IDS.restaurantes, term: 'ifood' });
+    expect(parse('quanto gastei com uber nos ultimos 3 meses').entities.term).toBe('uber');
+    expect(parse('quanto gastei com restaurante?').entities.term).toBeUndefined();
+    expect(parse('quanto gastei com mercado este mês?').entities.term).toBeUndefined();
+  });
+
+  it.each<[string, string]>([
+    ['gastie 50 no mercado', 'mercado'],
+    ['paguie 40 de uber', 'uber'],
+    ['gastei 30 às 14h no almoço', 'almoço'],
+  ])('descrição sem verbo com erro e sem hora: %s', (text, description) => {
+    expect(parse(text).entities.description).toBe(description);
+  });
+
+  it('posso_gastar com verbo no infinitivo: "viajar" vira "Viagem"', () => {
+    expect(parse('dá pra viajar gastando 5 mil?').entities).toMatchObject({ amount: 500000, description: 'Viagem' });
+  });
+
+  it('descrição longa é cortada em ~60 caracteres', () => {
+    const r = parse(`gastei 50 no mercado ${'muito '.repeat(500)}`);
+    expect(r.entities.description?.length).toBeLessThanOrEqual(60);
+  });
+});
+
+describe('parseMessage — regressões: continuações', () => {
+  it('"e em 10x?" traz as parcelas como entidade da continuação', () => {
+    const r = parse('e em 10x?');
+    expect(r.intent).toBe('desconhecido');
+    expect(r.entities.installments).toBe(10);
+    expect(r.confidence).toBeGreaterThanOrEqual(0.2);
+  });
+
+  it('frase longa com uma entidade solta não é continuação', () => {
+    expect(parse('quero saber uma coisa sobre o mercado da esquina').confidence).toBeLessThan(0.2);
+  });
+});
+
+describe('parseMessage — regressões: pagamento de fatura com o verbo longe', () => {
+  it('"paguei hoje de manhã os 3907,96 da fatura do cartão" ainda é pagamento', () => {
+    expectCase([
+      'paguei hoje de manhã os 3907,96 da fatura do cartão',
+      'registrar_transferencia',
+      { amount: 390796, toAccountId: 'acc-nubank', accountId: 'acc-corrente' },
+    ]);
+  });
+
+  it('compra com categoria no cartão continua sendo despesa', () => {
+    expect(parse('paguei 50 no uber no cartão, vai pra fatura').intent).toBe('registrar_despesa');
+  });
+});

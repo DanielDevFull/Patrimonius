@@ -75,7 +75,7 @@ export function PreferencesSection({ settings }: { settings: Settings }) {
               className="pr-16"
               onChange={(e) => setMonths(e.target.value)}
             />
-            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-500">
+            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-500 dark:text-slate-400">
               meses
             </span>
           </div>
@@ -84,7 +84,7 @@ export function PreferencesSection({ settings }: { settings: Settings }) {
           label="Meta de poupança"
           htmlFor={ids.rate}
           error={rateErr}
-          hint="Parte da renda guardada todo mês. A regra 50/30/20 sugere 20%."
+          hint="Parte da renda guardada todo mês. A regra 50/30/20 sugere 20%. Use 0 para não ter meta."
         >
           <div className="relative">
             <Input
@@ -99,7 +99,7 @@ export function PreferencesSection({ settings }: { settings: Settings }) {
               className="pr-10"
               onChange={(e) => setRate(e.target.value)}
             />
-            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-500">
+            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-500 dark:text-slate-400">
               %
             </span>
           </div>

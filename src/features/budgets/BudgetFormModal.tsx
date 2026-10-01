@@ -1,11 +1,11 @@
 import { Lightbulb } from 'lucide-react';
 import { useId, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { suggestBudgets, type BudgetStatus } from '@/analytics';
+import { categorySpent, suggestBudgets, type BudgetStatus } from '@/analytics';
 import { Button, Field, Modal, Money, MoneyInput, Select, useToast } from '@/components/ui';
 import { deleteBudget, setBudget } from '@/db/repo';
 import { formatMonthLong } from '@/domain/dates';
 import type { Budget, Category, Cents, ID, MonthKey, Transaction } from '@/domain/types';
-import { categorySpent, defaultBudgetOf, planBudgetSave, type BudgetScope } from './budget-utils';
+import { defaultBudgetOf, planBudgetSave, type BudgetScope } from './budget-utils';
 
 export interface BudgetFormModalProps {
   month: MonthKey;

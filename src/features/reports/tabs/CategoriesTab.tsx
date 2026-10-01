@@ -53,7 +53,13 @@ export function CategoriesTab({ data, months }: CategoriesTabProps) {
 
   return (
     <div className="space-y-4">
-      <SegmentedControl options={KIND_OPTIONS} value={kind} onChange={setKind} aria-label="Tipo de categoria" />
+      <SegmentedControl
+        mode="radio"
+        options={KIND_OPTIONS}
+        value={kind}
+        onChange={setKind}
+        aria-label="Tipo de categoria"
+      />
 
       <Card>
         <section aria-labelledby="categories-trend-title">
@@ -130,7 +136,7 @@ export function CategoriesTab({ data, months }: CategoriesTabProps) {
           {matrix.rows.length === 0 ? (
             <EmptyState title={`Sem ${kindLabel} no período`} description="Escolha um período maior ou registre lançamentos." />
           ) : (
-            <div className="-mx-4 overflow-x-auto px-4 sm:-mx-5 sm:px-5">
+            <div className="relative -mx-4 overflow-x-auto px-4 sm:-mx-5 sm:px-5">
               <table className="w-full min-w-max text-sm">
                 <caption className="sr-only">
                   {`${kind === 'despesa' ? 'Despesas' : 'Receitas'} por categoria de ${formatMonthLong(months[0])} a ${formatMonthLong(endMonth)}`}

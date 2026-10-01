@@ -26,6 +26,8 @@ export interface GoalFormModalProps {
   template?: GoalTemplate | null;
   /** Valor já guardado (edição), para o planejamento e o status. */
   saved: Cents;
+  /** A meta em edição já recebeu aporte neste mês (o mês atual deixa de contar no planejamento). */
+  contributedThisMonth?: boolean;
   accounts: Account[];
   today: ISODate;
   onClose: () => void;
@@ -40,7 +42,16 @@ function accountOptions(accounts: Account[], currentId: ID | null): Account[] {
 }
 
 /** Criação/edição de meta. Montado somente quando aberto. */
-export function GoalFormModal({ goal, template, saved, accounts, today, onClose, onSaved }: GoalFormModalProps) {
+export function GoalFormModal({
+  goal,
+  template,
+  saved,
+  contributedThisMonth = false,
+  accounts,
+  today,
+  onClose,
+  onSaved,
+}: GoalFormModalProps) {
   const toast = useToast();
   const ids = {
     form: useId(),
@@ -65,7 +76,7 @@ export function GoalFormModal({ goal, template, saved, accounts, today, onClose,
 
   const errors = validateGoalForm({ name, target, targetDate }, today, goal?.targetDate ?? null);
   const show = (f: GoalFormField) => (submitted ? errors[f] : undefined);
-  const plan = monthlyPlan(target, saved, targetDate || null, today);
+  const plan = monthlyPlan(target, saved, targetDate || null, today, contributedThisMonth);
   const colors = COLOR_PALETTE.includes(color) ? COLOR_PALETTE : [...COLOR_PALETTE, color];
   const options = accountOptions(accounts, goal?.accountId ?? null);
 

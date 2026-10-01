@@ -84,9 +84,9 @@ export interface BudgetStatus {
   /** spent / budgeted (0 quando budgeted = 0 e spent = 0; Infinity se budgeted = 0 e spent > 0). */
   percent: number;
   /**
-   * Projeção para o fim do mês. Mês corrente: ritmo diário aplicado só aos gastos variáveis até today
-   * (round(variáveis / diasDecorridos * diasNoMês)) + gastos fixos (recorrência/parcela) e com data futura, pelo valor real.
-   * Mês passado: spent. Mês futuro: spent.
+   * Projeção para o fim do mês. Mês corrente, a partir do 7º dia: ritmo diário aplicado só aos gastos variáveis até
+   * today (round(variáveis / diasDecorridos * diasNoMês)) + gastos fixos (recorrência/parcela) e com data futura,
+   * pelo valor real. Nos 6 primeiros dias do mês (poucos dias para medir o ritmo), mês passado e mês futuro: spent.
    */
   projected: Cents;
   /** 'estourado' se spent > budgeted; 'alerta' se percent >= 0.8 ou projected > budgeted; senão 'ok'. */
@@ -238,11 +238,17 @@ export interface GoalProgress {
   remaining: Cents;
   /** saved / targetAmount limitado a [0, 1]. */
   percent: number;
-  /** Meses restantes até o mês do prazo (mínimo 1 se o prazo é futuro; 0 se vencido; null sem prazo). */
+  /**
+   * Meses em que ainda dá para aportar até o prazo: do mês atual (se ainda sem aporte) até o mês do prazo
+   * (mínimo 1 se o prazo é futuro; 0 se vencido; null sem prazo).
+   */
   monthsLeft: number | null;
   /** Aporte mensal necessário para cumprir o prazo (null sem prazo). */
   requiredMonthly: Cents | null;
-  /** Média de aportes líquidos por mês nos últimos 3 meses (incluindo o atual). */
+  /**
+   * Média de aportes líquidos por mês: 3 meses completos anteriores + o atual (se já teve aporte), contando só os
+   * meses desde o início da meta (criação ou primeiro aporte).
+   */
   averageMonthlyContribution: Cents;
   /** Data estimada de conclusão no ritmo atual (null se ritmo <= 0 e não concluída). */
   projectedCompletionDate: ISODate | null;
@@ -254,7 +260,7 @@ export interface GoalsOverview {
   totalSaved: Cents;
   activeCount: number;
   completedCount: number;
-  /** Soma dos requiredMonthly das metas ativas. */
+  /** Soma dos requiredMonthly das metas ativas com prazo futuro (metas vencidas não entram: o valor delas não é mensal). */
   totalRequiredMonthly: Cents;
   items: GoalProgress[];
 }
@@ -345,7 +351,10 @@ export interface AffordabilityResult {
   projectedEndBalance: Cents;
   /** Saldo projetado no fim do mês DEPOIS da compra. */
   balanceAfter: Cents;
-  /** Sobra mensal média (receitas - despesas) dos últimos 3 meses completos. */
+  /**
+   * Sobra mensal média dos últimos 3 meses completos: receitas − despesas, sem contar como gasto os aportes em
+   * Investimentos e reserva (ver averageMonthlySurplus).
+   */
   averageMonthlySurplus: Cents;
   /** Frases curtas em pt-BR explicando o veredito. */
   reasons: string[];

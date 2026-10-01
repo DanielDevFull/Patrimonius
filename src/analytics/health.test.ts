@@ -176,6 +176,82 @@ describe('emergencyFund', () => {
   });
 });
 
+describe('emergencyFund — pouco histórico e contas de terceiros', () => {
+  const settingsWith = (estimate: number | null) => ({ ...makeData().settings, monthlyIncomeEstimate: estimate });
+
+  it('um único gasto no mês passado não vira o custo de vida: a renda estimada é o piso', () => {
+    // Perfil novo: renda estimada de R$ 4.000,00 e conta corrente com R$ 3.000,00.
+    const base = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 300000 })],
+      settings: settingsWith(400000),
+    });
+    expect(emergencyFund(base, '2026-10-01')).toMatchObject({ monthlyEssential: 200000, level: 'baixa' });
+
+    const padaria = { ...base, transactions: [makeTransaction({ accountId: 'cc', amount: 1500, date: '2026-09-30' })] };
+    const ef = emergencyFund(padaria, '2026-10-01');
+    // Antes: custo essencial de R$ 15,00, "199 meses" e reserva 'completa' com meta de R$ 90,00.
+    expect(ef.monthlyEssential).toBe(200000);
+    expect(ef.target).toBe(1200000);
+    expect(ef.level).toBe('baixa');
+    expect(comp(financialHealth(padaria, '2026-10-01'), 'reserva').score).toBeLessThan(50);
+  });
+
+  it('sem renda estimada e com menos de 1 mês de gastos, não declara a reserva completa', () => {
+    const data = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 300000 })],
+      transactions: [makeTransaction({ accountId: 'cc', amount: 1500, date: '2026-09-30' })],
+      settings: settingsWith(null),
+    });
+    const ef = emergencyFund(data, '2026-10-01');
+    expect(ef.level).toBe('sem_dados');
+    expect(ef.monthsCovered).toBeNull();
+  });
+
+  it('o primeiro mês parcial é extrapolado pelos dias registrados', () => {
+    // Começou em 20/09: salário de R$ 5.000,00 em 05/09 e R$ 100,00 de mercado por dia de 20 a 30/09.
+    const data = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 400000, createdAt: '2026-09-20T12:00:00.000Z' })],
+      transactions: [
+        makeTransaction({ accountId: 'cc', type: 'receita', amount: 500000, date: '2026-09-05', categoryId: 'cat-salario' }),
+        ...Array.from({ length: 11 }, (_, i) =>
+          makeTransaction({ accountId: 'cc', amount: 10000, date: `2026-09-${20 + i}` }),
+        ),
+      ],
+      settings: settingsWith(null),
+    });
+    const ef = emergencyFund(data, '2026-10-01');
+    // 1.100 em 11 de 30 dias => 3.000 por mês (antes: 1.100 e reserva 'completa' com 7,2 meses).
+    expect(ef.monthlyEssential).toBe(300000);
+    expect(ef.reserve).toBe(790000);
+    expect(ef.monthsCovered).toBeCloseTo(2.63, 2);
+    expect(ef.level).toBe('baixa');
+  });
+
+  it('contas fora do patrimônio (dinheiro de terceiros) não contam como reserva', () => {
+    const data = makeData({
+      accounts: [
+        makeAccount({ id: 'cc', initialBalance: 300000 }),
+        makeAccount({ id: 'emp', name: 'Conta da empresa', initialBalance: 1000000, includeInNetWorth: false }),
+      ],
+      transactions: COMPLETE_MONTHS.flatMap((m) => monthTx(m, { moradia: 100000 })),
+    });
+    expect(emergencyFund(data, TODAY).reserve).toBe(300000 - 300000);
+  });
+});
+
+describe('financialHealth — aportes não são gasto', () => {
+  it('quem investe a sobra fecha os meses no azul no componente de fluxo', () => {
+    // Jul–set: renda 5.000, moradia 3.000 e 2.000 em Investimentos e reserva.
+    const data = healthyData({
+      transactions: COMPLETE_MONTHS.flatMap((m) => monthTx(m, { income: 500000, moradia: 300000, investido: 200000 })),
+    });
+    const report = financialHealth(data, '2026-10-01');
+    expect(comp(report, 'poupanca')).toMatchObject({ score: 100, value: '40% da renda' });
+    // Antes: '0 de 3 meses no azul' e "você gastou tudo o que ganhou".
+    expect(comp(report, 'fluxo')).toMatchObject({ score: 100, value: '3 de 3 meses no azul' });
+  });
+});
+
 describe('financialHealth', () => {
   it('perfil organizado: notas por componente e score ponderado (conferido à mão)', () => {
     const report = financialHealth(healthyData(), TODAY);
@@ -348,9 +424,10 @@ describe('financialHealth', () => {
     const c = comp(financialHealth(data, TODAY), 'metas');
     expect(c.score).toBe(50);
     expect(c.value).toBe('1 de 2 no ritmo');
-    // Reserva: faltam 570.000 em 2 meses => 285.000/mês; média 30.000 / 3 = 10.000.
+    // Reserva: faltam 570.000 em 2 meses (nov e dez; outubro já teve aporte) => 285.000/mês;
+    // meta criada em outubro => média 30.000 / 1 mês.
     expect(c.tip).toBe(
-      'Para cumprir o prazo de "Reserva", aporte R$ 2.850,00 por mês (sua média recente é R$ 100,00).',
+      'Para cumprir o prazo de "Reserva", aporte R$ 2.850,00 por mês (sua média recente é R$ 300,00).',
     );
 
     const vencida = comp(
@@ -399,5 +476,45 @@ describe('financialHealth', () => {
     // (2500 + 0 + 2000 + 0 + 1000 + 500) / 100 = 60
     expect(report.score).toBe(60);
     expect(report.grade).toBe('regular');
+  });
+});
+
+describe('financialHealth — regressões', () => {
+  it('salário lançado no mês corrente, sem mês completo com receitas: não diz "Sem renda registrada"', () => {
+    const base = makeData();
+    const report = financialHealth(
+      makeData({
+        accounts: [makeAccount({ id: 'cc', initialBalance: 100000 })],
+        transactions: [
+          makeTransaction({ accountId: 'cc', amount: 1500, date: '2026-09-30', categoryId: 'cat-mercado' }),
+          makeTransaction({ accountId: 'cc', type: 'receita', amount: 500000, date: '2026-10-01', categoryId: 'cat-salario' }),
+        ],
+        settings: { ...base.settings },
+      }),
+      '2026-10-01',
+    );
+    const savings = report.components.find((c) => c.key === 'poupanca')!;
+    expect(savings.value).toBe('Aguardando um mês completo');
+    expect(savings.tip).not.toContain('Registre suas receitas');
+    expect(savings.score).toBe(50);
+  });
+});
+
+describe('financialHealth — sem meta de poupança (0% nas Configurações)', () => {
+  it('mede a poupança pela referência da regra 50/30/20, sem chamá-la de "sua meta"', () => {
+    const base = healthyData();
+    const data = healthyData({
+      settings: { ...base.settings, savingsRateTarget: 0 },
+      transactions: COMPLETE_MONTHS.flatMap((m) =>
+        monthTx(m, { income: 1000000, moradia: 500000, mercado: 200000, lazer: 200000 }),
+      ),
+    });
+    const c = comp(financialHealth(data, TODAY), 'poupanca');
+    expect(c.score).toBe(50); // 10% de 20% (referência)
+    expect(c.tip).toBe(
+      'Para chegar aos 20% da renda sugeridos pela regra 50/30/20, poupe mais R$ 1.000,00 por mês — separe esse valor assim que receber.',
+    );
+    expect(comp(financialHealth({ ...base, settings: { ...base.settings, savingsRateTarget: 0 } }, TODAY), 'poupanca').tip)
+      .toBe('Você poupa acima dos 20% sugeridos pela regra 50/30/20. Direcione a sobra para a reserva de emergência e para suas metas.');
   });
 });

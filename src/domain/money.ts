@@ -26,8 +26,12 @@ export function formatSignedBRL(cents: Cents): string {
   return (cents > 0 ? '+' : '-') + formatBRL(Math.abs(cents));
 }
 
-/** 123456789 -> 'R$ 1,2 mi' */
+/**
+ * 123456789 -> 'R$ 1,2 mi'; 150000 -> 'R$ 1,5 mil'. Abaixo de R$ 1.000 não há sufixo e uma casa decimal ('R$ 903,8')
+ * pareceria um valor exato errado, então usa o valor completo ('R$ 903,84').
+ */
 export function formatBRLCompact(cents: Cents): string {
+  if (Math.abs(cents) < 100000) return formatBRL(cents);
   return normalizeSpaces(brlCompact.format(cents / 100));
 }
 
@@ -42,11 +46,6 @@ export function formatPercent(ratio: number): string {
   return normalizeSpaces(percentFmt.format(ratio));
 }
 
-/** Converte reais (number) em centavos inteiros com arredondamento correto. */
-export function toCents(reais: number): Cents {
-  return Math.round(reais * 100);
-}
-
 /** Converte centavos em reais (number) — use apenas para exibição/gráficos. */
 export function fromCents(cents: Cents): number {
   return cents / 100;
@@ -55,7 +54,8 @@ export function fromCents(cents: Cents): number {
 /**
  * Faz o parse de um valor digitado pelo usuário em formato brasileiro ou internacional.
  * Aceita: '1.234,56', '1234,56', '1234.56', 'R$ 50', '50', '-12,5', '1,5 mil', '2 mil', '1.000'.
- * Retorna centavos ou null se não for um número válido.
+ * Retorna centavos ou null se não for um número válido — inclusive com mais de 2 casas decimais ('1,234', '12.345,678'),
+ * que seriam arredondadas sem aviso (com 'mil'/'k' valem até 5 casas: '1,234 mil' = R$ 1.234,00).
  *
  * Regras de separador:
  * - Se houver vírgula e ponto, o último que aparecer é o separador decimal.
@@ -109,17 +109,12 @@ export function parseMoney(input: string): Cents | null {
     normalized = s;
   }
   if (!/^\d*\.?\d*$/.test(normalized) || normalized === '.' || normalized === '') return null;
+  const decimals = normalized.split('.')[1]?.length ?? 0;
+  if (decimals > (multiplier === 1000 ? 5 : 2)) return null;
   const value = Number(normalized);
   if (!Number.isFinite(value)) return null;
   const cents = Math.round(value * multiplier * 100);
   return negative ? -cents : cents;
-}
-
-/** Soma segura de centavos. */
-export function sumCents(values: Iterable<Cents>): Cents {
-  let total = 0;
-  for (const v of values) total += v;
-  return total;
 }
 
 /** Divide `total` em `parts` parcelas inteiras cuja soma é exatamente `total` (centavos extras nas primeiras). */

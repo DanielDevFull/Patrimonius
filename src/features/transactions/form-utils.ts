@@ -2,7 +2,7 @@
  * Regras puras do formulário de lançamento (validação, valores padrão, tags, parcelas).
  * Mantidas fora do componente para serem testadas isoladamente.
  */
-import { isISODate } from '@/domain/dates';
+import { isISODate, isPlausibleDate } from '@/domain/dates';
 import { splitCents } from '@/domain/money';
 import { normalizeText } from '@/domain/text';
 import type {
@@ -11,7 +11,9 @@ import type {
   Category,
   CategoryKind,
   Cents,
+  FinanceData,
   ID,
+  ISODate,
   Transaction,
   TransactionType,
 } from '@/domain/types';
@@ -176,6 +178,8 @@ export interface TransactionFormCheck {
   toAccountId: ID | null;
   categoryId: ID | null;
   date: string;
+  /** Hoje: a data precisa ser plausível (ano de 1900 até o ano corrente + 10). */
+  today: ISODate;
   /** null = campo inválido; ignorado quando o campo não se aplica. */
   installments: number | null;
   installmentsApplies: boolean;
@@ -200,6 +204,7 @@ export function validateTransactionForm(
     errors.categoryId = 'Escolha uma categoria.';
   }
   if (!isISODate(v.date)) errors.date = 'Informe uma data válida.';
+  else if (!isPlausibleDate(v.date, v.today)) errors.date = 'Confira o ano da data.';
   if (v.installmentsApplies && v.installments === null) {
     errors.installments = `Informe de 1 a ${MAX_INSTALLMENTS} parcelas.`;
   }
@@ -220,4 +225,53 @@ export function resolveDescription(
   if (typed) return typed;
   if (type === 'transferencia') return toAccount ? `Transferência para ${toAccount.name}` : 'Transferência';
   return category?.name ?? (type === 'receita' ? 'Receita' : 'Despesa');
+}
+
+export interface InstallmentCounts {
+  /** Parcelas da compra que ainda existem (algumas podem já ter sido excluídas). */
+  group: number;
+  /** Parcelas existentes com número >= o desta (esta e as próximas). */
+  future: number;
+}
+
+/** Quantas parcelas da mesma compra ainda existem (para os rótulos de "Excluir parcela"). */
+export function installmentCounts(transactions: Transaction[], tx: Transaction): InstallmentCounts {
+  const info = tx.installment;
+  if (!info) return { group: 1, future: 1 };
+  let group = 0;
+  let future = 0;
+  for (const t of transactions) {
+    if (t.installment?.groupId !== info.groupId) continue;
+    group += 1;
+    if (t.installment.number >= info.number) future += 1;
+  }
+  return { group, future };
+}
+
+/** Registro de dívida/meta criado junto com o lançamento (pagamento de dívida, aporte ou resgate de meta). */
+export type TransactionLink =
+  | { kind: 'debtPayment'; id: ID; name: string }
+  | { kind: 'goalContribution'; id: ID; name: string; amount: Cents };
+
+/** Mapa lançamento -> pagamento de dívida / aporte de meta vinculado a ele. */
+export function transactionLinks(
+  data: Pick<FinanceData, 'debts' | 'debtPayments' | 'goals' | 'goalContributions'>,
+): Map<ID, TransactionLink> {
+  const links = new Map<ID, TransactionLink>();
+  const debtNames = new Map(data.debts.map((d) => [d.id, d.name]));
+  const goalNames = new Map(data.goals.map((g) => [g.id, g.name]));
+  for (const p of data.debtPayments) {
+    if (p.transactionId === null) continue;
+    links.set(p.transactionId, { kind: 'debtPayment', id: p.id, name: debtNames.get(p.debtId) ?? 'dívida' });
+  }
+  for (const c of data.goalContributions) {
+    if (c.transactionId === null) continue;
+    links.set(c.transactionId, {
+      kind: 'goalContribution',
+      id: c.id,
+      name: goalNames.get(c.goalId) ?? 'meta',
+      amount: c.amount,
+    });
+  }
+  return links;
 }

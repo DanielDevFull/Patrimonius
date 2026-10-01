@@ -58,7 +58,12 @@ export default function DashboardPage() {
   const current = useMemo(() => {
     if (!data) return null;
     return {
-      balance: totalBalance(data.accounts, data.transactions, { asOf: today }),
+      // Como o "Total em contas": contas fora do patrimônio (ex.: conta da empresa) não são dinheiro do usuário.
+      balance: totalBalance(
+        data.accounts.filter((a) => a.includeInNetWorth),
+        data.transactions,
+        { asOf: today },
+      ),
       insights: generateInsights(data, today),
       health: financialHealth(data, today),
       forecast: cashflowForecast(data, today),
@@ -73,6 +78,12 @@ export default function DashboardPage() {
   const greeting = greetingLine(hour, data.settings.userName);
   const agentName = data.settings.agentName?.trim() || 'Pat';
   const activeAccounts = data.accounts.filter((a) => !a.archived).length;
+  // O "Saldo atual" soma só as contas do patrimônio; as demais (ex.: conta conjunta que o usuário só administra)
+  // ficam de fora e o rótulo diz isso, para bater com "Total em contas" na tela de Contas.
+  const outsideNetWorth = data.accounts.filter((a) => !a.archived && !a.includeInNetWorth).length;
+  const balanceHint = `${plural(activeAccounts - outsideNetWorth, 'conta', 'contas')} · até hoje${
+    outsideNetWorth > 0 ? ` · ${outsideNetWorth} fora do patrimônio não ${outsideNetWorth === 1 ? 'entra' : 'entram'}` : ''
+  }`;
   const monthLabel = capitalize(formatMonthLong(month));
 
   if (data.transactions.length === 0) {
@@ -85,14 +96,14 @@ export default function DashboardPage() {
           title={greeting}
           subtitle="Bem-vindo ao Patrimonius. Vamos organizar suas finanças em poucos passos."
         />
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <FirstStepsCard steps={firstSteps(data, hasChatted)} className="lg:col-span-2" />
           <div className="space-y-4">
             {activeAccounts > 0 && (
               <StatCard
                 label="Saldo atual"
                 value={<Money value={current.balance} />}
-                hint={`${plural(activeAccounts, 'conta', 'contas')} · até hoje`}
+                hint={balanceHint}
                 icon={<Wallet size={20} aria-hidden />}
                 tone="brand"
               />
@@ -132,11 +143,11 @@ export default function DashboardPage() {
         }
       />
 
-      <section aria-label="Indicadores" className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section aria-label="Indicadores" className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Saldo atual"
           value={<Money value={current.balance} />}
-          hint={`${plural(activeAccounts, 'conta', 'contas')} · até hoje`}
+          hint={balanceHint}
           icon={<Wallet size={20} aria-hidden />}
           tone="brand"
         />
@@ -187,7 +198,7 @@ export default function DashboardPage() {
         />
       </section>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <InsightsCard
           insights={current.insights}
           agentName={agentName}
@@ -203,7 +214,7 @@ export default function DashboardPage() {
         <BudgetsCard overview={monthly.budgets} monthLabel={monthLabel} />
       </div>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
         <UpcomingCard items={current.upcoming} today={today} />
         <GoalsCard items={current.goals.items} />
         <RecentCard

@@ -9,7 +9,8 @@ import {
   type BudgetSuggestion,
   type CategoryTotal,
 } from '@/analytics';
-import { addMonthsToKey, daysInMonthKey, isInMonth, monthKey, parseISO } from '@/domain/dates';
+import { addMonthsToKey, daysInMonthKey, monthKey, parseISO } from '@/domain/dates';
+import { RULE_50_30_20 } from '@/domain/defaults';
 import type {
   Budget,
   BudgetGroup,
@@ -108,15 +109,6 @@ export function unbudgetedSpending(
     .map((row) => ({ ...row, canBudget: row.categoryId !== null && active.has(row.categoryId) }));
 }
 
-/** Total de despesas (pagas + pendentes) de uma categoria no mês. */
-export function categorySpent(transactions: Transaction[], categoryId: ID, month: MonthKey): Cents {
-  let total = 0;
-  for (const tx of transactions) {
-    if (tx.type === 'despesa' && tx.categoryId === categoryId && isInMonth(tx.date, month)) total += tx.amount;
-  }
-  return total;
-}
-
 /* ------------------------------------------------------------------ */
 /* Ritmo do mês                                                        */
 /* ------------------------------------------------------------------ */
@@ -191,8 +183,6 @@ export function buildSuggestionRows(
 /* ------------------------------------------------------------------ */
 
 export const BUDGET_GROUPS: BudgetGroup[] = ['necessidades', 'desejos', 'objetivos'];
-
-export const RULE_SHARES: Record<BudgetGroup, number> = { necessidades: 0.5, desejos: 0.3, objetivos: 0.2 };
 
 /** Meses de histórico usados para a renda média. */
 export const RULE_INCOME_MONTHS = 3;
@@ -272,7 +262,7 @@ export function ruleAnalysis(
     else ungrouped += item.budgeted;
   }
   const lines = BUDGET_GROUPS.map((group): RuleGroupLine => {
-    const share = RULE_SHARES[group];
+    const share = RULE_50_30_20[group];
     const ideal = Math.round(income * share);
     const budgeted = sums[group];
     return {

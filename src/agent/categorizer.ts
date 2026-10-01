@@ -18,24 +18,61 @@ export function descriptionKey(description: string): string {
 
 interface Vote {
   weight: number;
-  count: number;
   /** Data mais recente (desempate). */
   last: string;
 }
 
-function tally(
-  entries: { categoryId: ID; weight: number; date: string }[],
-): { categoryId: ID; share: number } | null {
-  const votes = new Map<ID, Vote>();
-  let total = 0;
-  for (const e of entries) {
-    const v = votes.get(e.categoryId) ?? { weight: 0, count: 0, last: '' };
-    v.weight += e.weight;
-    v.count += 1;
-    if (e.date > v.last) v.last = e.date;
-    votes.set(e.categoryId, v);
-    total += e.weight;
+/** Lançamentos do histórico com a mesma chave de descrição, agrupados por categoria. */
+type KeyVotes = Map<ID, { count: number; last: string }>;
+
+/** Histórico indexado por tipo (despesa/receita) e chave de descrição. */
+type HistoryIndex = Map<CategoryKind, Map<string, KeyVotes>>;
+
+/**
+ * Índice do histórico, memoizado por array (o app recria o array a cada mudança nos dados). Assim cada tecla no campo
+ * de descrição não normaliza de novo milhares de lançamentos: a busca exata é O(1) e a de semelhantes percorre só as
+ * descrições DISTINTAS. O tamanho é conferido para não usar um índice velho se o array for alterado no lugar.
+ */
+const indexCache = new WeakMap<Transaction[], { length: number; index: HistoryIndex }>();
+
+function historyIndex(history: Transaction[]): HistoryIndex {
+  const cached = indexCache.get(history);
+  if (cached && cached.length === history.length) return cached.index;
+  const index: HistoryIndex = new Map();
+  for (const tx of history) {
+    if ((tx.type !== 'despesa' && tx.type !== 'receita') || tx.categoryId === null) continue;
+    const key = descriptionKey(tx.description);
+    if (!key) continue;
+    let byKey = index.get(tx.type);
+    if (!byKey) index.set(tx.type, (byKey = new Map()));
+    let votes = byKey.get(key);
+    if (!votes) byKey.set(key, (votes = new Map()));
+    const date = `${tx.date}|${tx.createdAt}`;
+    const v = votes.get(tx.categoryId);
+    if (v) {
+      v.count += 1;
+      if (date > v.last) v.last = date;
+    } else votes.set(tx.categoryId, { count: 1, last: date });
   }
+  indexCache.set(history, { length: history.length, index });
+  return index;
+}
+
+/** Soma os votos de uma chave (peso = similaridade por lançamento), só de categorias válidas. */
+function addVotes(votes: Map<ID, Vote>, keyVotes: KeyVotes, weight: number, valid: Set<ID>): void {
+  for (const [categoryId, kv] of keyVotes) {
+    if (!valid.has(categoryId)) continue;
+    const v = votes.get(categoryId);
+    if (v) {
+      v.weight += weight * kv.count;
+      if (kv.last > v.last) v.last = kv.last;
+    } else votes.set(categoryId, { weight: weight * kv.count, last: kv.last });
+  }
+}
+
+function tally(votes: Map<ID, Vote>): { categoryId: ID; share: number } | null {
+  let total = 0;
+  for (const v of votes.values()) total += v.weight;
   let best: [ID, Vote] | null = null;
   for (const entry of votes) {
     if (
@@ -71,21 +108,10 @@ export function suggestCategory(
   const valid = new Set(categories.filter((c) => !c.archived && c.kind === kind).map((c) => c.id));
   if (!valid.size) return null;
 
-  const relevant = history.filter(
-    (tx) => tx.type === kind && tx.categoryId !== null && valid.has(tx.categoryId),
-  );
-  const exact: { categoryId: ID; weight: number; date: string }[] = [];
-  const similar: { categoryId: ID; weight: number; date: string }[] = [];
-  for (const tx of relevant) {
-    const k = descriptionKey(tx.description);
-    if (!k) continue;
-    const entry = { categoryId: tx.categoryId as ID, date: `${tx.date}|${tx.createdAt}` };
-    if (k === key) exact.push({ ...entry, weight: 1 });
-    else {
-      const sim = similarity(k, key);
-      if (sim >= 0.8) similar.push({ ...entry, weight: sim });
-    }
-  }
+  const byKey = historyIndex(history).get(kind);
+  const exact = new Map<ID, Vote>();
+  const exactVotes = byKey?.get(key);
+  if (exactVotes) addVotes(exact, exactVotes, 1, valid);
 
   const exactWinner = tally(exact);
   if (exactWinner) {
@@ -94,6 +120,16 @@ export function suggestCategory(
       confidence: round(0.75 + 0.2 * exactWinner.share),
       reason: 'historico',
     };
+  }
+
+  // Sem igual: descrições semelhantes votam com peso = similaridade (calculada uma vez por descrição distinta).
+  const similar = new Map<ID, Vote>();
+  if (byKey) {
+    for (const [k, keyVotes] of byKey) {
+      if (k === key) continue;
+      const sim = similarity(k, key);
+      if (sim >= 0.8) addVotes(similar, keyVotes, sim, valid);
+    }
   }
 
   let best: CategorySuggestion | null = null;

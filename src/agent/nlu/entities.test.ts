@@ -221,3 +221,18 @@ describe('matchGoal', () => {
     expect(matchGoal('', goals)).toBeNull();
   });
 });
+
+describe('matchCategory — regressões', () => {
+  it('palavras genéricas dos nomes ("despesas", "receitas", "conta") não identificam categoria', () => {
+    expect(matchCategory('despesas do mês passado', categories)).toBeNull();
+    expect(matchCategory('minhas receitas', categories)).toBeNull();
+    expect(matchCategory('me conta uma piada', categories)).toBeNull();
+    expect(matchCategory('pagar as contas', categories)).toBeNull();
+  });
+
+  it('nome completo e complementos continuam funcionando', () => {
+    expect(matchCategory('outras despesas', categories)?.categoryId).toBe(CATEGORY_IDS.outrosDespesa);
+    expect(matchCategory('contas da casa', categories)?.categoryId).toBe(CATEGORY_IDS.contas);
+    expect(matchCategory('conta de luz', categories)?.categoryId).toBe(CATEGORY_IDS.contas);
+  });
+});

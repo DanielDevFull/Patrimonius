@@ -5,6 +5,7 @@ import { db } from '@/db/db';
 import { addAccount, addTransaction, setBudget, updateSettings } from '@/db/repo';
 import { CATEGORY_IDS } from '@/domain/defaults';
 import type { ID, ISODate } from '@/domain/types';
+import { describeElements, gridsWithoutBaseColumns } from '@/test/layout';
 import { renderWithProviders, resetDb } from '@/test/render';
 import BudgetsPage from './BudgetsPage';
 
@@ -318,5 +319,49 @@ describe('BudgetsPage', () => {
 
     await user.click(rule().getByText('Como funciona a regra?'));
     expect(rule().getByText(/pelo menos 20%/)).toBeVisible();
+  });
+
+  it('layout no celular: o grid da página tem coluna base minmax(0,1fr) (sem coluna "auto" mais larga que a tela)', async () => {
+    await setBudget(CATEGORY_IDS.restaurantes, 20000, '2026-10');
+    await expense(CATEGORY_IDS.restaurantes, 25000, '2026-10-08');
+    await renderPage();
+    await screen.findByRole('region', { name: 'Visão geral do mês' });
+    expect(describeElements(gridsWithoutBaseColumns(document.body))).toEqual([]);
+  });
+
+  it('no 1º dia do mês não extrapola um único gasto para o mês todo (sem projeção nem alerta falso)', async () => {
+    vi.setSystemTime(new Date(2026, 9, 1, 12, 0, 0));
+    await setBudget(CATEGORY_IDS.transporte, 85000, null);
+    await setBudget(CATEGORY_IDS.restaurantes, 2000000, null);
+    await expense(CATEGORY_IDS.transporte, 3569, '2026-10-01'); // uma corrida de Uber
+    await expense(CATEGORY_IDS.restaurantes, 63500, '2026-10-01');
+    await renderPage();
+    await screen.findByRole('listitem', { name: 'Transporte' });
+
+    // Antes: "Projeção para o fim do mês: R$ 1.106,39 — no ritmo atual, deve passar R$ 256,39 do limite" (×31)
+    // e status "Atenção"; em Restaurantes, "Projeção para o fim do mês: R$ 19.685,00".
+    const transporte = row('Transporte');
+    expect(transporte.getByText('Dentro do limite')).toBeInTheDocument();
+    expect(transporte.queryByText('Atenção')).not.toBeInTheDocument();
+    expect(row('Restaurantes e delivery').getByText('Dentro do limite')).toBeInTheDocument();
+    expect(screen.queryByText(/Projeção para o fim do mês/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no ritmo atual/)).not.toBeInTheDocument();
+    // Explica por que ainda não há projeção (baixa confiança no começo do mês).
+    expect(screen.getByText(/projeção para o fim do mês aparece a partir do dia 7/i)).toBeInTheDocument();
+  });
+
+  it('a partir do dia 7 a projeção volta e o aviso de "cedo demais" some', async () => {
+    vi.setSystemTime(new Date(2026, 9, 7, 12, 0, 0));
+    await setBudget(CATEGORY_IDS.transporte, 85000, null);
+    await expense(CATEGORY_IDS.transporte, 21000, '2026-10-02');
+    await renderPage();
+    await screen.findByRole('listitem', { name: 'Transporte' });
+
+    // 21.000 / 7 × 31 = 93.000 => R$ 930,00, R$ 80,00 acima do limite
+    expect(row('Transporte').getByText(/Projeção para o fim do mês/)).toHaveTextContent(
+      'Projeção para o fim do mês: R$ 930,00 — no ritmo atual, deve passar R$ 80,00 do limite',
+    );
+    expect(row('Transporte').getByText('Atenção')).toBeInTheDocument();
+    expect(screen.queryByText(/aparece a partir do dia 7/i)).not.toBeInTheDocument();
   });
 });

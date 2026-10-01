@@ -15,7 +15,7 @@ import {
 } from '@/components/ui';
 import { useFinanceData, useToday } from '@/db/hooks';
 import { deleteGoal, deleteGoalContribution, updateGoal } from '@/db/repo';
-import { formatDateBR } from '@/domain/dates';
+import { formatDateBR, monthKey } from '@/domain/dates';
 import { formatPercent } from '@/domain/money';
 import { plural } from '@/domain/text';
 import type { Goal, GoalContribution, ID } from '@/domain/types';
@@ -55,7 +55,7 @@ function TemplatePicker({
   compact?: boolean;
 }) {
   return (
-    <ul className={compact ? 'flex flex-wrap gap-2' : 'grid gap-2 sm:grid-cols-2 lg:grid-cols-3'}>
+    <ul className={compact ? 'flex flex-wrap gap-2' : 'grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3'}>
       {templates.map((t) => (
         <li key={t.key}>
           <button
@@ -131,6 +131,12 @@ export default function GoalsPage() {
     ? overview.items.find((i) => i.goalId === contribution.goalId)
     : undefined;
   const formSaved = form?.goal ? savedFor(form.goal.id, data.goalContributions) : 0;
+  const formGoalId = form?.goal?.id;
+  const formContributedThisMonth =
+    formGoalId !== undefined &&
+    data.goalContributions.some(
+      (c) => c.goalId === formGoalId && c.amount > 0 && monthKey(c.date) === monthKey(today),
+    );
 
   async function togglePause(goal: Goal) {
     const saved = savedFor(goal.id, data?.goalContributions ?? []);
@@ -201,7 +207,7 @@ export default function GoalsPage() {
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
           {SECTION_TITLES[key]} ({items.length})
         </h2>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {items.map((p) => {
             const goal = goalsById.get(p.goalId);
             if (!goal) return null;
@@ -260,7 +266,7 @@ export default function GoalsPage() {
         </Card>
       ) : (
         <div className="space-y-6">
-          <section aria-label="Resumo das metas" className="grid gap-3 sm:grid-cols-3">
+          <section aria-label="Resumo das metas" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <StatCard
               label="Total guardado"
               tone="brand"
@@ -276,7 +282,7 @@ export default function GoalsPage() {
               label="Aporte mensal necessário"
               icon={<CalendarClock size={20} aria-hidden />}
               value={<Money value={overview.totalRequiredMonthly} />}
-              hint="Soma das metas em andamento com prazo"
+              hint="Soma das metas em andamento com prazo a vencer (metas vencidas não entram)"
             />
             <StatCard
               label="Metas"
@@ -306,6 +312,7 @@ export default function GoalsPage() {
           goal={form.goal}
           template={form.template}
           saved={formSaved}
+          contributedThisMonth={formContributedThisMonth}
           accounts={data.accounts}
           today={today}
           onClose={() => setForm(null)}
@@ -321,6 +328,10 @@ export default function GoalsPage() {
           onClose={() => setContribution(null)}
           onDone={({ completed }) => {
             if (completed) celebrate(contributionGoal);
+          }}
+          onLinkAccount={() => {
+            setContribution(null);
+            setForm({ goal: contributionGoal, template: null });
           }}
         />
       )}

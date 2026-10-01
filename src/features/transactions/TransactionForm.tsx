@@ -20,6 +20,7 @@ import {
 import { db } from '@/db/db';
 import { useFinanceData, useToday } from '@/db/hooks';
 import { addAccount, addRecurring, addTransaction, updateTransaction } from '@/db/repo';
+import { plausibleDateRange } from '@/domain/dates';
 import { ACCOUNT_TYPE_ICONS, COLOR_PALETTE } from '@/domain/defaults';
 import type {
   Account,
@@ -43,6 +44,7 @@ import {
   parseTags,
   previousDescriptions,
   resolveDescription,
+  transactionLinks,
   validateTransactionForm,
   type TransactionFormField,
 } from './form-utils';
@@ -141,6 +143,8 @@ function TransactionFormBody({ onClose, initial, transaction, onSaved, data, tod
     tags: useId(),
   };
   const editing = transaction ?? null;
+  // Pagamento de dívida / aporte de meta criado junto com este lançamento (valor e data são sincronizados ao salvar).
+  const link = editing ? transactionLinks(data).get(editing.id) : undefined;
   const seed: TransactionFormInitial = editing
     ? {
         type: editing.type,
@@ -193,15 +197,18 @@ function TransactionFormBody({ onClose, initial, transaction, onSaved, data, tod
   const installments = installmentsApplies ? parseInstallments(installmentsText) : 1;
 
   // Sugestão automática de categoria enquanto o usuário não escolheu uma manualmente.
+  // O cálculo depende só do valor ADIADO: cada tecla re-renderiza com o texto novo sem refazer a sugestão
+  // (que percorre o histórico); ela é recalculada uma vez, no render adiado.
   const deferredDescription = useDeferredValue(description);
-  const suggestion = useMemo(
+  const deferredSuggestion = useMemo(
     () =>
-      // `description` também precisa estar preenchida: após "Salvar e novo" o valor adiado ainda traz o texto antigo.
-      kind && !categoryTouched && description.trim() && deferredDescription.trim()
+      kind && !categoryTouched && deferredDescription.trim()
         ? suggestCategory(deferredDescription, kind, data.categories, data.transactions)
         : null,
-    [kind, categoryTouched, description, deferredDescription, data.categories, data.transactions],
+    [kind, categoryTouched, deferredDescription, data.categories, data.transactions],
   );
+  // `description` também precisa estar preenchida: após "Salvar e novo" o valor adiado ainda traz o texto antigo.
+  const suggestion = description.trim() ? deferredSuggestion : null;
   const rawCategoryId = kind
     ? categoryTouched
       ? chosenCategoryId
@@ -244,9 +251,11 @@ function TransactionFormBody({ onClose, initial, transaction, onSaved, data, tod
     toAccountId: toId,
     categoryId,
     date,
+    today,
     installments,
     installmentsApplies,
   });
+  const dateRange = plausibleDateRange(today);
   const show = (field: TransactionFormField) => (submitted ? errors[field] : undefined);
 
   function changeType(next: TransactionType) {
@@ -492,6 +501,7 @@ function TransactionFormBody({ onClose, initial, transaction, onSaved, data, tod
     >
       <form id={ids.form} onSubmit={onSubmit} noValidate className="space-y-4">
         <SegmentedControl
+          mode="radio"
           aria-label="Tipo de lançamento"
           options={typeOptions}
           value={type}
@@ -510,6 +520,14 @@ function TransactionFormBody({ onClose, initial, transaction, onSaved, data, tod
           <p className="flex items-start gap-2 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800 dark:bg-sky-950 dark:text-sky-200">
             <Repeat size={14} className="mt-0.5 shrink-0" aria-hidden />
             Gerado por uma recorrência: as alterações valem só para este lançamento.
+          </p>
+        )}
+        {link && (
+          <p className="flex items-start gap-2 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800 dark:bg-sky-950 dark:text-sky-200">
+            <Info size={14} className="mt-0.5 shrink-0" aria-hidden />
+            {link.kind === 'debtPayment'
+              ? `Este lançamento é o pagamento da dívida “${link.name}”: mudanças de valor e data também atualizam o pagamento.`
+              : `Este lançamento é o aporte da meta “${link.name}”: mudanças de valor e data também atualizam o aporte.`}
           </p>
         )}
 
@@ -632,20 +650,37 @@ function TransactionFormBody({ onClose, initial, transaction, onSaved, data, tod
             </Field>
           ) : (
             <Field label="Data" htmlFor={ids.date} error={show('date')}>
-              <Input id={ids.date} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              <Input
+                id={ids.date}
+                type="date"
+                value={date}
+                min={dateRange.min}
+                max={dateRange.max}
+                aria-invalid={!!show('date')}
+                onChange={(e) => setDate(e.target.value)}
+              />
             </Field>
           )}
         </div>
 
         {type === 'transferencia' && (
           <Field label="Data" htmlFor={ids.date} error={show('date')}>
-            <Input id={ids.date} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <Input
+              id={ids.date}
+              type="date"
+              value={date}
+              min={dateRange.min}
+              max={dateRange.max}
+              aria-invalid={!!show('date')}
+              onChange={(e) => setDate(e.target.value)}
+            />
           </Field>
         )}
 
         <div className="flex flex-col gap-1.5">
           <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Situação</span>
           <SegmentedControl
+            mode="radio"
             aria-label="Situação"
             options={statusOptions}
             value={status}

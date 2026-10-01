@@ -4,9 +4,11 @@ import {
   accountBalances,
   affordability,
   budgetStatuses,
+  cardCommitted,
   cashflowForecast,
   liquidBalance,
   monthSummary,
+  savingsTargetPct,
   upcomingItems,
   type CashflowForecast,
 } from '@/analytics';
@@ -14,16 +16,26 @@ import { ROUTES } from '@/app/navigation';
 import {
   addDays,
   addMonths,
+  daysInMonth,
   diffDays,
   endOfMonth,
   formatDateBR,
   formatDateShort,
   formatMonthLong,
+  makeISO,
+  parseISO,
 } from '@/domain/dates';
 import { COLOR_PALETTE } from '@/domain/defaults';
 import { formatBRL, formatDecimal, splitCents } from '@/domain/money';
 import { plural } from '@/domain/text';
-import { ACCOUNT_TYPE_LABELS, type AccountType, type FinanceData, type ISODate } from '@/domain/types';
+import {
+  ACCOUNT_TYPE_LABELS,
+  type Account,
+  type AccountType,
+  type FinanceData,
+  type ID,
+  type ISODate,
+} from '@/domain/types';
 import {
   bullets,
   capitalizeDescription,
@@ -42,6 +54,7 @@ import {
   findAccount,
   findCategory,
   sum,
+  transactionsIn,
   type Handler,
   type HandlerOutput,
   type TurnContext,
@@ -74,6 +87,26 @@ function forecastChart(forecast: CashflowForecast): AgentCard {
   };
 }
 
+/** Próximo vencimento (hoje inclusive) para o dia do mês `dueDay` (limitado ao último dia do mês). */
+function nextDueDate(dueDay: number, today: ISODate): ISODate {
+  const { year, month } = parseISO(today);
+  const thisMonth = makeISO(year, month, Math.min(dueDay, daysInMonth(year, month)));
+  if (thisMonth >= today) return thisMonth;
+  const next = parseISO(addMonths(makeISO(year, month, 1), 1));
+  return makeISO(next.year, next.month, Math.min(dueDay, daysInMonth(next.year, next.month)));
+}
+
+/** Pagamentos de fatura agendados (transferências pendentes para o cartão), do mais próximo ao mais distante. */
+function scheduledCardPayments(data: FinanceData, cardId: ID) {
+  return data.transactions
+    .filter((tx) => tx.type === 'transferencia' && tx.status === 'pendente' && tx.toAccountId === cardId)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+function cardPhrase(account: Account): string {
+  return `${account.name.toLowerCase().startsWith('cart') ? 'do' : 'do cartão'} ${account.name}`;
+}
+
 /** consultar_saldo */
 export const balanceQuery: Handler = (ctx) => {
   const { data, today, entities: e } = ctx;
@@ -90,9 +123,15 @@ export const balanceQuery: Handler = (ctx) => {
     const balance = accountBalance(account, data.transactions, { asOf });
     if (account.type === 'cartao_credito') {
       const bill = Math.max(0, -balance);
-      const parts = [`A fatura em aberto ${account.name.toLowerCase().startsWith('cart') ? 'do' : 'do cartão'} ${account.name}${when} é ${money(bill)}.`];
+      const parts = [`A fatura em aberto ${cardPhrase(account)}${when} é ${money(bill)}.`];
+      if (!past) {
+        const payment = scheduledCardPayments(data, account.id).find((tx) => tx.date >= today);
+        if (payment) parts.push(`Há um pagamento de ${formatBRL(payment.amount)} agendado ${dateRelative(payment.date, today)}.`);
+        else if (bill > 0 && account.dueDay) parts.push(`O próximo vencimento é ${dateRelative(nextDueDate(account.dueDay, today), today)}.`);
+      }
       if (account.creditLimit && account.creditLimit > 0 && !past) {
-        const used = Math.max(0, -accountBalance(account, data.transactions, { includePending: true }));
+        // Fatura em aberto + parcelas e compras futuras; o pagamento agendado só libera limite quando acontece.
+        const used = cardCommitted(account, data.transactions, today);
         parts.push(
           `Limite disponível: ${formatBRL(Math.max(0, account.creditLimit - used))} de ${formatBRL(account.creditLimit)} (contando as parcelas futuras).`,
         );
@@ -116,10 +155,14 @@ export const balanceQuery: Handler = (ctx) => {
   }
 
   const balances = accountBalances(accounts, data.transactions, { asOf });
-  const liquid = liquidBalance(accounts, data.transactions, { asOf });
-  const invested = sum(accounts.filter((a) => INVESTMENT_TYPES.includes(a.type)).map((a) => balances[a.id]));
-  const cards = sum(accounts.filter((a) => a.type === 'cartao_credito').map((a) => balances[a.id]));
-  const total = sum(accounts.map((a) => balances[a.id]));
+  // Contas fora do patrimônio (ex.: conjunta que o usuário só administra) aparecem na lista, mas não entram nos
+  // totais: o "Saldo atual" do Painel e o "Total em contas" de Contas também não as somam.
+  const own = accounts.filter((a) => a.includeInNetWorth);
+  const outside = accounts.filter((a) => !a.includeInNetWorth).map((a) => a.name);
+  const liquid = liquidBalance(own, data.transactions, { asOf });
+  const invested = sum(own.filter((a) => INVESTMENT_TYPES.includes(a.type)).map((a) => balances[a.id]));
+  const cards = sum(own.filter((a) => a.type === 'cartao_credito').map((a) => balances[a.id]));
+  const total = sum(own.map((a) => balances[a.id]));
   const negatives = accounts.filter((a) => a.type !== 'cartao_credito' && balances[a.id] < 0).map((a) => a.name);
   let forecastLine: string | null = null;
   if (!past && hasCashAccounts(data)) {
@@ -131,6 +174,9 @@ export const balanceQuery: Handler = (ctx) => {
     invested !== 0 ? `Em investimentos, ${formatBRL(invested)}.` : null,
     cards < 0 ? `As faturas de cartão somam ${formatBRL(-cards)}.` : null,
     invested !== 0 || cards !== 0 ? `Saldo total: ${money(total)}.` : null,
+    outside.length
+      ? `${joinList(outside)} ${outside.length === 1 ? 'está fora do patrimônio e não entra' : 'estão fora do patrimônio e não entram'} nesses totais.`
+      : null,
     negatives.length ? `⚠️ ${joinList(negatives)} ${negatives.length === 1 ? 'está' : 'estão'} no negativo.` : null,
     forecastLine,
   ]);
@@ -144,7 +190,7 @@ export const balanceQuery: Handler = (ctx) => {
         items: accounts.map((a) => ({
           label: `${a.icon ? `${a.icon} ` : ''}${a.name}`,
           value: formatBRL(balances[a.id]),
-          hint: ACCOUNT_TYPE_LABELS[a.type],
+          hint: a.includeInNetWorth ? ACCOUNT_TYPE_LABELS[a.type] : `${ACCOUNT_TYPE_LABELS[a.type]} · fora do patrimônio`,
           tone: balances[a.id] < 0 ? 'negative' : 'neutral',
         })),
       },
@@ -198,6 +244,13 @@ export const forecastReply: Handler = (ctx) => {
   };
 };
 
+interface Bill {
+  date: ISODate;
+  description: string;
+  amount: number;
+  overdue: boolean;
+}
+
 /** contas_a_pagar */
 export const billsReply: Handler = (ctx) => {
   const { data, today, entities: e } = ctx;
@@ -206,7 +259,32 @@ export const billsReply: Handler = (ctx) => {
   const end =
     e.period && e.period.end >= today ? e.period.end : defaultEnd > minEnd ? defaultEnd : minEnd;
   const items = upcomingItems(data, today, diffDays(today, end));
-  const expenses = items.filter((i) => i.type === 'despesa');
+  const cards = new Map(activeAccounts(data).filter((a) => a.type === 'cartao_credito').map((a) => [a.id, a]));
+  const txById = new Map(data.transactions.map((tx) => [tx.id, tx]));
+  const ruleById = new Map(data.recurring.map((r) => [r.id, r]));
+  // Compras e parcelas no cartão não vencem sozinhas: entram na fatura (listada abaixo).
+  const onCard = (i: (typeof items)[number]) => {
+    const accountId = i.transactionId
+      ? txById.get(i.transactionId)?.accountId
+      : i.recurringId
+        ? ruleById.get(i.recurringId)?.accountId
+        : undefined;
+    return accountId !== undefined && cards.has(accountId);
+  };
+  const expenses: Bill[] = items
+    .filter((i) => i.type === 'despesa' && !onCard(i))
+    .map((i) => ({ date: i.date, description: i.description, amount: i.amount, overdue: i.overdue }));
+  for (const card of cards.values()) {
+    const payments = scheduledCardPayments(data, card.id).filter((tx) => tx.date <= end);
+    for (const tx of payments)
+      expenses.push({ date: tx.date, description: `Fatura ${card.name}`, amount: tx.amount, overdue: tx.date < today });
+    if (payments.length || !card.dueDay) continue;
+    const bill = Math.max(0, -accountBalance(card, data.transactions, { asOf: today }));
+    const due = nextDueDate(card.dueDay, today);
+    if (bill > 0 && due <= end)
+      expenses.push({ date: due, description: `Fatura ${card.name} (em aberto)`, amount: bill, overdue: false });
+  }
+  expenses.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : b.amount - a.amount));
   const incomes = items.filter((i) => i.type === 'receita' && !i.overdue);
   const memory = { lastPeriod: e.period };
   if (expenses.length === 0) {
@@ -266,7 +344,8 @@ export const billsReply: Handler = (ctx) => {
 
 /**
  * "Quanto posso gastar?" (sem valor): receitas do mês (inclusive as previstas) − gastos feitos e comprometidos
- * − o que falta da meta de poupança. Sem receita no mês, usa a folga da previsão de caixa.
+ * − o que falta da meta de poupança (nada, se o usuário não definiu meta). Sem receita no mês, usa a folga da
+ * previsão de caixa.
  */
 function spendingAllowance(ctx: TurnContext): HandlerOutput {
   const { data, today, month } = ctx;
@@ -275,6 +354,48 @@ function spendingAllowance(ctx: TurnContext): HandlerOutput {
   const days = diffDays(today, end) + 1;
   const suggestions = ['Posso gastar 300 num tênis?', 'Vou fechar o mês no azul?', 'Contas a pagar'];
   const memory = { lastPeriod: monthPeriod(month, today) };
+  // "e com lazer?": quanto ainda cabe no orçamento da categoria.
+  const category = findCategory(data, ctx.entities.categoryId);
+  if (category && category.kind === 'despesa') {
+    const label = categoryLabel(category);
+    const status = budgetStatuses(data.budgets, data.transactions, data.categories, month, today).find(
+      (b) => b.categoryId === category.id,
+    );
+    const categoryMemory = { ...memory, lastCategoryId: category.id };
+    if (!status) {
+      const spent = sum(
+        transactionsIn(data, monthPeriod(month, today), 'despesa', { categoryId: category.id }).map((tx) => tx.amount),
+      );
+      return {
+        text: `${label} não tem orçamento. Em ${long} você já gastou ${money(spent)} nessa categoria. Defina um limite (ex.: “orçamento de 400 para ${category.name.toLowerCase()}”) para eu calcular quanto ainda dá para gastar nela.`,
+        suggestions: [`Orçamento de 400 para ${category.name}`, ...suggestions],
+        memory: categoryMemory,
+      };
+    }
+    const free = Math.max(0, status.remaining);
+    return {
+      text:
+        free > 0
+          ? `No orçamento de ${label} restam ${money(free)} em ${long} (${formatBRL(status.spent)} de ${formatBRL(status.budgeted)} já usados) — cerca de ${money(Math.floor(free / days))} por dia nos próximos ${plural(days, 'dia', 'dias')}.`
+          : `⛔ O orçamento de ${label} (${formatBRL(status.budgeted)}) já acabou em ${long}: você gastou ${money(status.spent)}. Melhor segurar novos gastos nessa categoria.`,
+      cards: [
+        {
+          type: 'progress',
+          title: `Orçamento de ${category.name}`,
+          items: [
+            {
+              label,
+              current: status.spent,
+              target: status.budgeted,
+              tone: status.status === 'estourado' ? 'negative' : status.status === 'alerta' ? 'warning' : 'positive',
+            },
+          ],
+        },
+      ],
+      suggestions,
+      memory: categoryMemory,
+    };
+  }
   const s = monthSummary(data.transactions, month);
   const scheduled = upcomingItems(data, today, diffDays(today, end)).filter((i) => i.source === 'recorrencia');
   const income = s.income + sum(scheduled.filter((i) => i.type === 'receita').map((i) => i.amount));
@@ -294,20 +415,25 @@ function spendingAllowance(ctx: TurnContext): HandlerOutput {
       memory,
     };
   }
-  const targetPct = data.settings.savingsRateTarget > 0 ? data.settings.savingsRateTarget : 20;
-  const savingsGoal = Math.round((income * targetPct) / 100);
+  // Sem meta de poupança (0% nas Configurações), nada é reservado: o livre é o que sobra.
+  const targetPct = savingsTargetPct(data.settings);
+  const savingsGoal = targetPct === null ? 0 : Math.round((income * targetPct) / 100);
   const toSave = Math.max(0, savingsGoal - s.invested);
   const left = income - committed;
   const free = left - toSave;
   let text: string;
   if (left <= 0) {
     text = `⛔ Em ${long}, os gastos feitos e comprometidos (${formatBRL(committed)}) já ${left === 0 ? 'igualam' : 'passam'} as receitas (${formatBRL(income)}). Evite novos gastos que não sejam essenciais.`;
-  } else if (free <= 0) {
+  } else if (free <= 0 && targetPct !== null) {
     text = `⚠️ Em ${long} entram ${formatBRL(income)} e já saíram ou estão comprometidos ${formatBRL(committed)}. Sobram ${money(left)} — menos do que falta para a sua meta de poupança de ${formatNumber(targetPct)}% (${formatBRL(toSave)}). Segure os gastos extras para não comer a poupança do mês.`;
   } else {
     text = sentences([
       `Em ${long} entram ${formatBRL(income)} e já saíram ou estão comprometidos ${formatBRL(committed)}.`,
-      toSave > 0 ? `Separando ${formatBRL(toSave)} para a meta de poupança (${formatNumber(targetPct)}%),` : 'Com a meta de poupança do mês já cumprida,',
+      targetPct === null
+        ? 'Como você não definiu uma meta de poupança,'
+        : toSave > 0
+          ? `Separando ${formatBRL(toSave)} para a meta de poupança (${formatNumber(targetPct)}%),`
+          : 'Com a meta de poupança do mês já cumprida,',
       `você ainda pode gastar ${money(free)} até o fim do mês — cerca de ${money(Math.floor(free / days))} por dia nos próximos ${plural(days, 'dia', 'dias')}.`,
     ]);
   }
@@ -322,7 +448,9 @@ Quer testar uma compra? Pergunte, por exemplo: “posso gastar 300 num tênis?�
         items: [
           { label: 'Receitas (inclui previstas)', value: formatBRL(income), tone: 'positive' },
           { label: 'Gastos feitos e comprometidos', value: `-${formatBRL(committed)}`, tone: 'negative' },
-          { label: `Meta de poupança (${formatNumber(targetPct)}%)`, value: `-${formatBRL(toSave)}` },
+          ...(targetPct === null
+            ? []
+            : [{ label: `Meta de poupança (${formatNumber(targetPct)}%)`, value: `-${formatBRL(toSave)}` }]),
           { label: 'Livre para gastar', value: formatBRL(Math.max(0, free)), tone: free > 0 ? 'positive' : 'warning' },
         ],
       },
@@ -427,6 +555,10 @@ export const affordabilityReply: Handler = (ctx) => {
       verdict === 'sim'
         ? ['Como está meu orçamento?', 'Vou fechar o mês no azul?']
         : ['Dicas para economizar', 'Vou fechar o mês no azul?', 'Onde estou gastando mais?'],
-    memory: { lastCategoryId: category?.id },
+    // Compra simulada guardada para continuações ("e em 10x?", "e 150?").
+    memory: {
+      lastCategoryId: category?.id,
+      lastEntities: { amount, description: e.description, installments: e.installments, categoryId: category?.id },
+    },
   };
 };

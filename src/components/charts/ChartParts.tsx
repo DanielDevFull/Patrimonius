@@ -116,7 +116,7 @@ export function ChartDataTable({
       <summary className="cursor-pointer select-none rounded-lg py-1 text-sm font-medium text-brand-700 hover:underline dark:text-brand-400">
         {summary}
       </summary>
-      <div className="mt-2 max-h-72 overflow-auto rounded-xl border border-slate-200 dark:border-slate-800">
+      <div className="relative mt-2 max-h-72 overflow-auto rounded-xl border border-slate-200 dark:border-slate-800">
         <table className="w-full text-left text-xs sm:text-sm">
           <caption className="sr-only">{caption}</caption>
           <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800">

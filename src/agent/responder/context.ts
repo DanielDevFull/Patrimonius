@@ -2,7 +2,7 @@
  * Contexto e utilitários compartilhados pelos handlers de intenção do Pat.
  * Cada handler é uma função pura (TurnContext) => HandlerOutput.
  */
-import { categoryBreakdown, type CategoryTotal } from '@/analytics';
+import { categoryBreakdown, categoryBreakdownInRange, type CategoryTotal } from '@/analytics';
 import { isBetween, monthKey } from '@/domain/dates';
 import type {
   Account,
@@ -111,8 +111,9 @@ export function transactionsIn(
 }
 
 /**
- * Totais por categoria no período. Para um mês do calendário usa `categoryBreakdown` (@/analytics);
- * para outros períodos agrega com as mesmas regras (pagos + pendentes, 'Sem categoria' quando não existe).
+ * Totais por categoria no período (pagos + pendentes, 'Sem categoria' quando não existe). Para um mês do
+ * calendário usa `categoryBreakdown`; para outros períodos (ou filtrando uma conta), `categoryBreakdownInRange` —
+ * as mesmas regras e o mesmo desempate, ambos de @/analytics.
  */
 export function breakdownFor(
   data: FinanceData,
@@ -122,31 +123,7 @@ export function breakdownFor(
 ): CategoryTotal[] {
   const month = periodMonth(period);
   if (month && accountId === undefined) return categoryBreakdown(data.transactions, data.categories, month, kind);
-  const byId = new Map(data.categories.map((c) => [c.id, c]));
-  const totals = new Map<ID | null, { total: number; count: number }>();
-  let grand = 0;
-  for (const tx of transactionsIn(data, period, kind, { accountId })) {
-    const key = tx.categoryId !== null && byId.has(tx.categoryId) ? tx.categoryId : null;
-    const entry = totals.get(key) ?? { total: 0, count: 0 };
-    entry.total += tx.amount;
-    entry.count += 1;
-    totals.set(key, entry);
-    grand += tx.amount;
-  }
-  const rows: CategoryTotal[] = [];
-  for (const [categoryId, { total, count }] of totals) {
-    const c = categoryId === null ? undefined : byId.get(categoryId);
-    rows.push({
-      categoryId,
-      name: c?.name ?? 'Sem categoria',
-      icon: c?.icon ?? '❔',
-      color: c?.color ?? '#94a3b8',
-      total,
-      share: grand > 0 ? total / grand : 0,
-      count,
-    });
-  }
-  return rows.sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, 'pt-BR'));
+  return categoryBreakdownInRange(data.transactions, data.categories, period.start, period.end, kind, { accountId });
 }
 
 /** Soma de valores. */

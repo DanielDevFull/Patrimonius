@@ -18,8 +18,15 @@ import { activeAccounts } from '@/features/transactions/form-utils';
 import { TransactionFormModal, type TransactionFormInitial } from '@/features/transactions/TransactionForm';
 import { AccountCard } from './AccountCard';
 import { AccountFormModal } from './AccountFormModal';
-import { accountsTotals, balancesView, sortAccountsForDisplay } from './account-utils';
+import {
+  accountRemovalImpact,
+  accountsTotals,
+  balancesView,
+  sortAccountsForDisplay,
+  type AccountRemovalImpact,
+} from './account-utils';
 import { AdjustBalanceModal } from './AdjustBalanceModal';
+import { DeleteAccountModal } from './DeleteAccountModal';
 
 export default function AccountsPage() {
   const data = useFinanceData();
@@ -29,6 +36,7 @@ export default function AccountsPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [editing, setEditing] = useState<{ account: Account | null } | null>(null);
   const [adjusting, setAdjusting] = useState<Account | null>(null);
+  const [removing, setRemoving] = useState<{ account: Account; impact: AccountRemovalImpact } | null>(null);
   const [txForm, setTxForm] = useState<TransactionFormInitial | null>(null);
   const [txSeq, setTxSeq] = useState(0);
 
@@ -63,14 +71,37 @@ export default function AccountsPage() {
   }
 
   async function remove(account: Account) {
+    if (!data || !balances) return;
+    const impact = accountRemovalImpact(
+      account,
+      balances[account.id]?.current ?? account.initialBalance,
+      data.transactions,
+      data.recurring,
+      today,
+    );
+    // Saldo/fatura em aberto ou lançamentos futuros: avisa que o valor sai dos totais e oferece acertar antes.
+    if (!account.archived && (impact.balance !== 0 || impact.futureCount > 0)) {
+      setRemoving({ account, impact });
+      return;
+    }
+    const linkedGoals = data.goals.filter((g) => g.accountId === account.id).length;
     const ok = await confirm({
       title: `Excluir a conta “${account.name}”?`,
       message:
-        'Se houver lançamentos ou recorrências ligados a ela, a conta será arquivada em vez de excluída, para preservar o seu histórico.',
+        'Se houver lançamentos ou recorrências ligados a ela, a conta será arquivada em vez de excluída, para preservar o seu histórico.' +
+        (linkedGoals === 0
+          ? ''
+          : linkedGoals === 1
+            ? ' Se for excluída, a meta que guarda dinheiro nela fica sem conta vinculada.'
+            : ` Se for excluída, as ${linkedGoals} metas que guardam dinheiro nela ficam sem conta vinculada.`),
       confirmLabel: 'Excluir',
       danger: true,
     });
     if (!ok) return;
+    await finishRemove(account);
+  }
+
+  async function finishRemove(account: Account) {
     try {
       const result = await deleteOrArchiveAccount(account.id);
       if (result === 'deleted') toast('Conta excluída.');
@@ -160,6 +191,15 @@ export default function AccountsPage() {
               hint={totals.cardInvoices > 0 ? 'Já descontadas do total' : 'Nenhuma fatura em aberto'}
             />
           </section>
+          {totals.archivedWithBalance > 0 && (
+            <p className="-mt-3 mb-6 text-sm text-slate-500 dark:text-slate-400">
+              {totals.archivedWithBalance === 1
+                ? 'Conta arquivada com saldo'
+                : `${totals.archivedWithBalance} contas arquivadas com saldo`}
+              : <Money value={totals.archivedBalance} colored={totals.archivedBalance < 0} /> (fora dos totais
+              acima, mas ainda conta no patrimônio líquido).
+            </p>
+          )}
 
           {active.length === 0 ? (
             <Card className="mb-4">
@@ -222,6 +262,23 @@ export default function AccountsPage() {
           onClose={() => setEditing(null)}
         />
       )}
+      <DeleteAccountModal
+        account={removing?.account ?? null}
+        impact={removing?.impact ?? null}
+        onClose={() => setRemoving(null)}
+        onPayInvoice={(account) => {
+          setRemoving(null);
+          payInvoice(account, Math.max(0, -(balances[account.id]?.current ?? 0)));
+        }}
+        onAdjust={(account) => {
+          setRemoving(null);
+          setAdjusting(account);
+        }}
+        onConfirm={(account) => {
+          setRemoving(null);
+          void finishRemove(account);
+        }}
+      />
       {adjusting && (
         <AdjustBalanceModal
           account={adjusting}

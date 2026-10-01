@@ -22,7 +22,8 @@ export function Money({ value, signed, colored, compact, className }: MoneyProps
     <span
       className={cn(
         'money tabular whitespace-nowrap',
-        colored && value > 0 && 'text-emerald-600 dark:text-emerald-400',
+        // emerald-700 no claro: contraste AA (≈5,4:1) em fundo branco; emerald-600 dá só 3,65:1.
+        colored && value > 0 && 'text-emerald-700 dark:text-emerald-400',
         colored && value < 0 && 'text-rose-600 dark:text-rose-400',
         className,
       )}

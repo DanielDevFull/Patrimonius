@@ -137,7 +137,12 @@ export function GoalCard({
             {goal.icon || '🎯'}
           </span>
           <div className="min-w-0 flex-1">
-            <h3 id={headingId} className="truncate font-semibold text-slate-900 dark:text-slate-100">
+            {/* Até 2 linhas: o nome é a informação principal e os botões de ação tiram largura. */}
+            <h3
+              id={headingId}
+              title={goal.name}
+              className="line-clamp-2 font-semibold wrap-break-word text-slate-900 dark:text-slate-100"
+            >
               {goal.name}
             </h3>
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -201,7 +206,7 @@ export function GoalCard({
                   {formatDateBR(progress.targetDate)}
                   {!done && progress.monthsLeft !== null && progress.monthsLeft > 0 && (
                     <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
-                      em {plural(progress.monthsLeft, 'mês', 'meses')}
+                      {plural(progress.monthsLeft, 'mês', 'meses')} para aportar
                     </span>
                   )}
                 </>

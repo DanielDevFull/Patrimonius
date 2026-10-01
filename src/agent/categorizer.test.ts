@@ -186,3 +186,59 @@ describe('suggestCategory — palavras-chave e nome', () => {
     expect(suggestCategory('ifood', 'despesa', onlyIncome, [])).toBeNull();
   });
 });
+
+describe('suggestCategory — histórico grande', () => {
+  const descriptions = [
+    'Supermercado Extra',
+    'Padaria do Zé',
+    'Uber viagem',
+    'iFood pedido',
+    'Farmácia São João',
+    'Posto Shell',
+    'Netflix',
+    'Conta de luz',
+    'Academia',
+    'Cinema',
+  ];
+  const ids = [
+    CATEGORY_IDS.mercado,
+    CATEGORY_IDS.restaurantes,
+    CATEGORY_IDS.transporte,
+    CATEGORY_IDS.restaurantes,
+    CATEGORY_IDS.saude,
+    CATEGORY_IDS.transporte,
+    CATEGORY_IDS.assinaturas,
+    CATEGORY_IDS.contas,
+    CATEGORY_IDS.assinaturas,
+    CATEGORY_IDS.lazer,
+  ];
+  const history = Array.from({ length: 20000 }, (_, i) =>
+    tx(`${descriptions[i % descriptions.length]} ${i}`, ids[i % ids.length]),
+  );
+
+  it('digitar letra a letra não reprocessa todo o histórico a cada chamada', () => {
+    const typed = 'Supermercado Extra';
+    const start = performance.now();
+    let last = null;
+    for (let i = 1; i <= typed.length; i++)
+      last = suggestCategory(typed.slice(0, i), 'despesa', categories, history);
+    const elapsed = performance.now() - start;
+    expect(last).toMatchObject({ categoryId: CATEGORY_IDS.mercado, reason: 'historico' });
+    // Antes: ~18 passadas completas por 20 mil lançamentos (segundos). Com o índice por array, uma só.
+    expect(elapsed).toBeLessThan(1500);
+  });
+
+  it('um array alterado no lugar (novo lançamento) não usa o índice antigo', () => {
+    const small = [tx('Pet shop Bicho', CATEGORY_IDS.compras)];
+    expect(suggestCategory('Pet shop Bicho', 'despesa', categories, small)?.categoryId).toBe(
+      CATEGORY_IDS.compras,
+    );
+    small.push(
+      tx('Pet shop Bicho', CATEGORY_IDS.pets),
+      tx('Pet shop Bicho', CATEGORY_IDS.pets, '2026-09-11'),
+    );
+    expect(suggestCategory('Pet shop Bicho', 'despesa', categories, small)?.categoryId).toBe(
+      CATEGORY_IDS.pets,
+    );
+  });
+});

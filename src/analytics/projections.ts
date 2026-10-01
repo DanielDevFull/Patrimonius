@@ -4,7 +4,7 @@ import type { Cents, FinanceData, ISODate } from '@/domain/types';
 import { cashflowForecast } from './forecast';
 import { emergencyFund } from './health';
 import { isFlow } from './internal/common';
-import { averageMonthlyExpense, averageMonthlyIncome } from './summary';
+import { averageMonthlySurplus, expenseTrackingStart } from './summary';
 import type { AffordabilityResult, AffordabilityVerdict, GrowthPoint } from './types';
 
 /** Limite padrão de meses para monthsToReach (100 anos). */
@@ -94,7 +94,9 @@ function hasRecentHistory(data: FinanceData, today: ISODate): boolean {
  * - As parcelas seguem splitCents (centavos extras nas primeiras), como o repositório cria compras parceladas;
  *   valores negativos contam como 0 e `installments` é truncado para um inteiro >= 1.
  * - A comparação com a sobra média só vale para compras parceladas (installments > 1): à vista, o que importa é o
- *   saldo do mês. Sobra média = renda média - despesa média dos 3 meses completos (meses vazios ignorados).
+ *   saldo do mês. Sobra média = averageMonthlySurplus dos 3 meses completos: renda − despesas, sem contar como gasto
+ *   os aportes em Investimentos e reserva (meses vazios ignorados; o mês em que o registro começou é extrapolado
+ *   pelos dias registrados — ver expenseTrackingStart).
  * - "Reserva abaixo da meta" = gap da reserva de emergência > 0 (sem dados de gastos, não pesa).
  */
 export function affordability(
@@ -114,13 +116,16 @@ export function affordability(
 
   const month = monthKey(today);
   const hasHistory = hasRecentHistory(data, today);
-  const averageMonthlySurplus =
-    averageMonthlyIncome(data.transactions, month, SURPLUS_HISTORY_MONTHS) -
-    averageMonthlyExpense(data.transactions, month, SURPLUS_HISTORY_MONTHS);
+  const surplus = averageMonthlySurplus(
+    data.transactions,
+    month,
+    SURPLUS_HISTORY_MONTHS,
+    expenseTrackingStart(data),
+  );
   const fund = emergencyFund(data, today);
 
   const goesNegative = balanceAfter < 0;
-  const exceedsSurplus = parcelado && hasHistory && firstPayment > averageMonthlySurplus;
+  const exceedsSurplus = parcelado && hasHistory && firstPayment > surplus;
   const slackShare = projectedEndBalance > 0 ? firstPayment / projectedEndBalance : null;
   const eatsSlack = slackShare !== null && slackShare > CAUTION_SHARE_OF_SLACK;
   const reserveBelowTarget = fund.gap > 0;
@@ -147,18 +152,18 @@ export function affordability(
 
   if (!hasHistory) {
     reasons.push('Ainda não há meses completos registrados para avaliar sua sobra mensal média.');
-  } else if (averageMonthlySurplus <= 0) {
+  } else if (surplus <= 0) {
     reasons.push(
-      `Nos últimos meses suas despesas ${averageMonthlySurplus === 0 ? 'igualaram' : 'superaram'} suas receitas${averageMonthlySurplus < 0 ? ` em ${formatBRL(-averageMonthlySurplus)} por mês, em média` : ''}.`,
+      `Nos últimos meses suas despesas ${surplus === 0 ? 'igualaram' : 'superaram'} suas receitas${surplus < 0 ? ` em ${formatBRL(-surplus)} por mês, em média` : ''}.`,
     );
   } else if (parcelado) {
     reasons.push(
       exceedsSurplus
-        ? `A parcela de ${formatBRL(firstPayment)} é maior que sua sobra média de ${formatBRL(averageMonthlySurplus)} por mês.`
-        : `A parcela de ${formatBRL(firstPayment)} cabe na sua sobra média de ${formatBRL(averageMonthlySurplus)} por mês.`,
+        ? `A parcela de ${formatBRL(firstPayment)} é maior que sua sobra média de ${formatBRL(surplus)} por mês.`
+        : `A parcela de ${formatBRL(firstPayment)} cabe na sua sobra média de ${formatBRL(surplus)} por mês.`,
     );
   } else {
-    reasons.push(`Sua sobra média nos últimos meses é de ${formatBRL(averageMonthlySurplus)} por mês.`);
+    reasons.push(`Sua sobra média nos últimos meses é de ${formatBRL(surplus)} por mês.`);
   }
 
   if (!goesNegative && eatsSlack && slackShare !== null)
@@ -176,7 +181,7 @@ export function affordability(
     verdict,
     projectedEndBalance,
     balanceAfter,
-    averageMonthlySurplus,
+    averageMonthlySurplus: surplus,
     reasons: reasons.slice(0, MAX_REASONS),
   };
 }

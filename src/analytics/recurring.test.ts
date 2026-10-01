@@ -18,10 +18,30 @@ function idMaker(prefix = 'gen') {
 }
 
 describe('nextOccurrence', () => {
-  it('semanal e quinzenal somam dias atravessando mês e ano', () => {
+  it('semanal soma 7 dias atravessando mês e ano', () => {
     expect(nextOccurrence('2026-12-29', 'semanal')).toBe('2027-01-05');
-    expect(nextOccurrence('2026-10-20', 'quinzenal')).toBe('2026-11-03');
     expect(nextOccurrence('2028-02-22', 'semanal')).toBe('2028-02-29');
+  });
+
+  it('quinzenal é duas vezes por mês: dia âncora e 15 dias depois (não a cada 14 dias)', () => {
+    expect(nextOccurrence('2026-10-05', 'quinzenal')).toBe('2026-10-20');
+    expect(nextOccurrence('2026-10-20', 'quinzenal')).toBe('2026-11-05');
+    expect(nextOccurrence('2026-12-20', 'quinzenal', 5)).toBe('2027-01-05');
+    // 15 e 30: em fevereiro o segundo dia vira o último do mês, e volta a 30 em março.
+    expect(nextOccurrence('2027-02-15', 'quinzenal', 15)).toBe('2027-02-28');
+    expect(nextOccurrence('2027-02-28', 'quinzenal', 15)).toBe('2027-03-15');
+    expect(nextOccurrence('2027-03-15', 'quinzenal', 30)).toBe('2027-03-30');
+  });
+
+  it('quinzenal: 24 ocorrências no ano, nunca 3 no mesmo mês', () => {
+    const rule = makeRecurring({ accountId: acc, frequency: 'quinzenal', startDate: '2026-01-02', nextDate: '2026-01-02' });
+    const dates = occurrencesBetween(rule, '2026-01-01', '2026-12-31');
+    // Antes (a cada 14 dias): 26 datas, com 02, 16 e 30 de janeiro.
+    expect(dates).toHaveLength(24);
+    expect(dates.slice(0, 3)).toEqual(['2026-01-02', '2026-01-17', '2026-02-02']);
+    const perMonth = new Map<string, number>();
+    for (const d of dates) perMonth.set(d.slice(0, 7), (perMonth.get(d.slice(0, 7)) ?? 0) + 1);
+    expect([...perMonth.values()].every((n) => n === 2)).toBe(true);
   });
 
   it('mensal com âncora 31 vai para 28/29 e volta para 31', () => {

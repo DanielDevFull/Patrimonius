@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { greeting, respond, type AgentReply, type ConversationState } from '@/agent';
+import { greeting, respond, type AgentReply, type ConversationState, type TransactionDraft } from '@/agent';
 import { useConfirm, useToast } from '@/components/ui';
 import {
   addChatMessage,
@@ -18,6 +18,7 @@ import {
   budgetDoneReply,
   canceledReply,
   contributionDoneReply,
+  draftFromSaved,
   goalDoneReply,
   isInternalPath,
   makePayload,
@@ -25,6 +26,7 @@ import {
   transactionDoneReply,
   TYPING_DELAY_MS,
   withActionState,
+  withTransactionDraft,
   type AgentMessagePayload,
 } from './chat-utils';
 
@@ -51,7 +53,12 @@ function mergeStates(a: AgentMessagePayload, b: AgentMessagePayload | undefined)
   if (!b) return a;
   const done = [...new Set([...a.done, ...b.done])].sort((x, y) => x - y);
   const canceled = [...new Set([...a.canceled, ...b.canceled])].filter((i) => !done.includes(i)).sort((x, y) => x - y);
-  return { ...a, done, canceled };
+  // Ações já concluídas por nós guardam o rascunho efetivamente salvo: prevalece sobre uma leitura ainda desatualizada.
+  const actions = a.reply.actions.map((action, i) => {
+    const written = b.reply.actions[i];
+    return b.done.includes(i) && written?.type === action.type ? written : action;
+  });
+  return { ...a, reply: { ...a.reply, actions }, done, canceled };
 }
 
 /**
@@ -128,10 +135,20 @@ export function useAssistantChat({ data, messages, today, typingDelay = TYPING_D
     }
   }
 
-  /** Grava o novo estado da ação (feita/cancelada) na mensagem de origem. */
-  async function markAction(message: ChatMessage, payload: AgentMessagePayload, index: number, state: 'done' | 'canceled') {
+  /**
+   * Grava o novo estado da ação (feita/cancelada) na mensagem de origem. Com `draft` (lançamento salvo), o card
+   * passa a mostrar os valores gravados em vez da proposta original.
+   */
+  async function markAction(
+    message: ChatMessage,
+    payload: AgentMessagePayload,
+    index: number,
+    state: 'done' | 'canceled',
+    draft?: TransactionDraft | null,
+  ) {
     const base = mergeStates(payload, writtenRef.current.get(message.id));
-    const next = withActionState(base, index, state);
+    const marked = withActionState(base, index, state);
+    const next = draft ? withTransactionDraft(marked, index, draft) : marked;
     writtenRef.current.set(message.id, next);
     await updateChatMessage(message.id, { payload: next });
   }
@@ -154,7 +171,7 @@ export function useAssistantChat({ data, messages, today, typingDelay = TYPING_D
   function confirmTransaction(message: ChatMessage, payload: AgentMessagePayload, index: number, input: NewTransactionInput) {
     return guarded(message, index, 'Não foi possível registrar o lançamento.', async () => {
       const txs = await addTransaction(input);
-      await markAction(message, payload, index, 'done');
+      await markAction(message, payload, index, 'done', draftFromSaved(txs));
       await addAgentReply(transactionDoneReply(txs, data, today));
     });
   }
@@ -162,7 +179,7 @@ export function useAssistantChat({ data, messages, today, typingDelay = TYPING_D
   /** Lançamento salvo pelo formulário de edição (a partir de uma proposta do agente). */
   function transactionSaved(message: ChatMessage, payload: AgentMessagePayload, index: number, txs: Transaction[]) {
     return guarded(message, index, 'O lançamento foi salvo, mas não consegui atualizar a conversa.', async () => {
-      await markAction(message, payload, index, 'done');
+      await markAction(message, payload, index, 'done', draftFromSaved(txs));
       await addAgentReply(transactionDoneReply(txs, data, today));
     });
   }

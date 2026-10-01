@@ -1,9 +1,9 @@
 import { useId, useState, type FormEvent } from 'react';
-import { Button, Field, Modal, Money, MoneyInput, useToast } from '@/components/ui';
+import { Button, Field, Modal, Money, MoneyInput, Switch, useToast } from '@/components/ui';
 import { addTransaction } from '@/db/repo';
 import { CATEGORY_IDS } from '@/domain/defaults';
 import type { Account, Category, Cents, ISODate } from '@/domain/types';
-import { balanceAdjustment } from './account-utils';
+import { balanceAdjustment, realBalanceFromInput } from './account-utils';
 
 export interface AdjustBalanceModalProps {
   account: Account;
@@ -22,7 +22,7 @@ function adjustmentCategoryId(categories: Category[], type: 'receita' | 'despesa
 }
 
 /**
- * "Ajustar saldo": o usuário informa o saldo real e o app cria um lançamento de ajuste
+ * "Ajustar saldo": o usuário informa o saldo real (em cartão, a fatura em aberto) e o app cria um lançamento de ajuste
  * (receita ou despesa em "outros", descrição "Ajuste de saldo") com a diferença.
  */
 export function AdjustBalanceModal({
@@ -34,16 +34,18 @@ export function AdjustBalanceModal({
 }: AdjustBalanceModalProps) {
   const toast = useToast();
   const ids = { form: useId(), real: useId() };
+  const isCard = account.type === 'cartao_credito';
   const [real, setReal] = useState<Cents | null>(null);
+  const [credit, setCredit] = useState(isCard && currentBalance > 0);
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
-  const adjustment = real === null ? null : balanceAdjustment(currentBalance, real);
-  const isCard = account.type === 'cartao_credito';
+  const realBalance = realBalanceFromInput(real, isCard, credit);
+  const adjustment = realBalance === null ? null : balanceAdjustment(currentBalance, realBalance);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setSubmitted(true);
-    if (real === null) return;
+    if (realBalance === null) return;
     if (!adjustment) {
       toast('O saldo já confere — nada a ajustar.', 'info');
       onClose();
@@ -89,20 +91,48 @@ export function AdjustBalanceModal({
     >
       <form id={ids.form} onSubmit={onSubmit} noValidate className="space-y-4">
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          Saldo no app hoje: <Money value={currentBalance} className="font-semibold" />
+          {isCard ? (
+            currentBalance > 0 ? (
+              <>
+                Crédito a favor no app hoje: <Money value={currentBalance} className="font-semibold" />
+              </>
+            ) : (
+              <>
+                Fatura em aberto no app hoje: <Money value={-currentBalance} className="font-semibold" />
+              </>
+            )
+          ) : (
+            <>
+              Saldo no app hoje: <Money value={currentBalance} className="font-semibold" />
+            </>
+          )}
         </p>
         <Field
-          label="Saldo real hoje"
+          label={isCard ? (credit ? 'Crédito a favor hoje' : 'Fatura em aberto hoje') : 'Saldo real hoje'}
           htmlFor={ids.real}
-          error={submitted && real === null ? 'Informe o saldo real da conta.' : undefined}
+          error={
+            submitted && real === null
+              ? isCard
+                ? 'Informe o valor (0 se não houver).'
+                : 'Informe o saldo real da conta.'
+              : undefined
+          }
           hint={
             isCard
-              ? 'Para cartão, informe a fatura em aberto como valor negativo (ex.: -350,00).'
+              ? 'Confira no app ou na fatura do cartão e digite o valor como aparece lá (sem sinal de menos).'
               : 'Confira no app do banco ou no extrato. Pode ser negativo.'
           }
         >
-          <MoneyInput id={ids.real} value={real} onChange={setReal} allowNegative autoFocus />
+          <MoneyInput id={ids.real} value={real} onChange={setReal} allowNegative={!isCard} autoFocus />
         </Field>
+        {isCard && (
+          <Switch
+            checked={credit}
+            onChange={setCredit}
+            label="Tenho crédito no cartão"
+            description="Marque se o cartão está com saldo a seu favor (ex.: estorno maior que a fatura)."
+          />
+        )}
         {real !== null && (
           <p
             className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700 dark:bg-slate-800 dark:text-slate-200"

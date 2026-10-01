@@ -12,6 +12,8 @@ import type {
   IntentName,
   TransactionDraft,
 } from '@/agent';
+import { findAmounts } from '@/agent/nlu/amount';
+import { fold } from '@/agent/nlu/text';
 import { ROUTES } from '@/app/navigation';
 import {
   addDays,
@@ -24,7 +26,7 @@ import {
   todayISO,
 } from '@/domain/dates';
 import type { NewTransactionInput } from '@/db/repo';
-import { formatBRL } from '@/domain/money';
+import { formatBRL, splitMoneyText, type TextPart } from '@/domain/money';
 import { normalizeText } from '@/domain/text';
 import type {
   Account,
@@ -79,6 +81,17 @@ export function withActionState(
   }
   if (payload.done.includes(index)) return payload;
   return { ...payload, canceled: sortedAdd(payload.canceled) };
+}
+
+/**
+ * Novo payload com o rascunho da ação de lançamento `index` substituído (ex.: pelos valores efetivamente salvos),
+ * para o card "Registrado" da conversa refletir o lançamento gravado. Outras ações não são alteradas.
+ */
+export function withTransactionDraft(payload: AgentMessagePayload, index: number, draft: TransactionDraft): AgentMessagePayload {
+  const action = payload.reply.actions[index];
+  if (action?.type !== 'create_transaction') return payload;
+  const actions = payload.reply.actions.map((a, i) => (i === index ? { ...action, draft } : a));
+  return { ...payload, reply: { ...payload.reply, actions } };
 }
 
 /* ------------------------------------------------------------------ */
@@ -356,6 +369,35 @@ export function draftToInitial(
   };
 }
 
+function byDateThenInstallment(a: Transaction, b: Transaction): number {
+  if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+  return (a.installment?.number ?? 0) - (b.installment?.number ?? 0);
+}
+
+/**
+ * Rascunho com os valores efetivamente gravados (pela confirmação no card ou pelo formulário "Editar"), para o card
+ * da conversa mostrar o que foi registrado — e não a proposta original. Parcelado: valor TOTAL do grupo e o número
+ * de parcelas; a descrição perde o sufixo ' (1/N)'. null se nada foi gravado (ex.: recorrência sem lançamento ainda).
+ */
+export function draftFromSaved(txs: Transaction[]): TransactionDraft | null {
+  const first = [...txs].sort(byDateThenInstallment)[0];
+  if (!first) return null;
+  const groupId = first.installment?.groupId;
+  const group = groupId ? txs.filter((t) => t.installment?.groupId === groupId) : [first];
+  const transfer = first.type === 'transferencia';
+  return {
+    type: first.type,
+    amount: group.reduce((s, t) => s + t.amount, 0),
+    date: first.date,
+    description: first.installment ? baseDescription(first.description) : first.description,
+    categoryId: transfer ? null : first.categoryId,
+    accountId: first.accountId,
+    toAccountId: transfer ? first.toAccountId : null,
+    status: first.status,
+    installments: first.installment ? Math.max(1, first.installment.total) : 1,
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* Respostas de confirmação ("Pronto! …")                              */
 /* ------------------------------------------------------------------ */
@@ -481,6 +523,39 @@ export function canceledReply(): AgentReply {
   return reply('agradecimento', 'Tudo bem, não registrei nada. 👍 Se quiser, me diga de novo com os dados certos.', [
     'O que você sabe fazer?',
   ]);
+}
+
+/* ------------------------------------------------------------------ */
+/* Valores em texto livre (modo "ocultar valores")                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Separa os valores de um texto livre — mensagem digitada pelo usuário ou sugestão de pergunta — para o modo
+ * "ocultar valores" (trechos `money` recebem a classe `.money`). Além de 'R$ 1.234,56', marca os valores que o
+ * Pat reconhece sem o símbolo: '1.250', '9650', '6 mil', '2k', '50 reais', 'cem reais'. Datas, parcelas ('10x'),
+ * prazos ('12 meses') e percentuais continuam visíveis. Juntar os trechos devolve o texto original.
+ */
+export function splitUserMoneyText(text: string): TextPart[] {
+  const ranges: { start: number; end: number }[] = findAmounts(fold(text)).map(({ start, end }) => ({ start, end }));
+  let pos = 0;
+  for (const part of splitMoneyText(text)) {
+    if (part.money) ranges.push({ start: pos, end: pos + part.text.length });
+    pos += part.text.length;
+  }
+  ranges.sort((a, b) => a.start - b.start || b.end - a.end);
+  const parts: TextPart[] = [];
+  let last = 0;
+  for (const { start, end } of ranges) {
+    if (end <= last) continue;
+    const from = Math.max(start, last);
+    if (from > last) parts.push({ text: text.slice(last, from), money: false });
+    const prev = parts.at(-1);
+    if (prev?.money && from === last) prev.text += text.slice(from, end);
+    else parts.push({ text: text.slice(from, end), money: true });
+    last = end;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last), money: false });
+  return parts;
 }
 
 /* ------------------------------------------------------------------ */

@@ -160,7 +160,17 @@ export const budgetStatusReply: Handler = (ctx) => {
     );
   if (alert.length)
     parts.push(
-      `⚠️ Em alerta: ${joinList(alert.map((i) => `${categoryLabel({ icon: i.icon, name: i.categoryName })} (${formatPercent(i.percent)})`))}.`,
+      `⚠️ Em alerta: ${joinList(
+        alert.map(
+          (i) =>
+            // Alerta só pelo ritmo (ainda abaixo de 80% do limite): mostra a projeção, não um percentual baixo.
+            `${categoryLabel({ icon: i.icon, name: i.categoryName })} (${
+              i.percent < 0.8 && i.projected > i.budgeted
+                ? `${formatPercent(i.percent)} usado; no ritmo atual, ~${formatBRL(i.projected)}`
+                : formatPercent(i.percent)
+            })`,
+        ),
+      )}.`,
     );
   if (!over.length && !alert.length) parts.push('✅ Todos dentro do limite. 👏');
   if (overview.unbudgetedSpent > 0) parts.push(`Fora dos orçamentos, você gastou mais ${formatBRL(overview.unbudgetedSpent)}.`);
@@ -209,7 +219,12 @@ export const setBudgetReply: Handler = (ctx) => {
           ? [{ type: 'set_budget', label: `Definir ${formatBRL(suggested)}`, categoryId: category.id, amount: suggested, month: targetMonth }]
           : [],
       suggestions: suggested > 0 ? [`Orçamento de ${formatDecimal(suggested)} para ${category.name}`] : [],
-      memory: { lastCategoryId: category.id },
+      // O próximo valor ("800") completa este orçamento.
+      memory: {
+        lastCategoryId: category.id,
+        lastEntities: { categoryId: category.id, budgetMonth: targetMonth },
+        awaitingAmount: true,
+      },
     };
   }
   const amount = e.amount;

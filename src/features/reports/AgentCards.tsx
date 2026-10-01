@@ -71,7 +71,7 @@ export function AgentCards({ cards }: { cards: AgentCard[] }) {
   return (
     <div className="space-y-4">
       {stats.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {stats.map((c) => (
             <StatCard
               key={c.title}
@@ -84,7 +84,7 @@ export function AgentCards({ cards }: { cards: AgentCard[] }) {
         </div>
       )}
       {others.length > 0 && (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {others.map((card, i) => (
             <Card key={`${card.type}-${card.title}-${i}`}>
               <CardHeader title={card.title} className="mb-3" />

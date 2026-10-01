@@ -8,10 +8,21 @@
 
 const COMBINING = /[̀-ͯ]/g;
 
+/**
+ * Indicadores ordinais e o símbolo de grau não têm decomposição canônica (NFD): "13º" ficaria "13º" e o número
+ * seria lido como dinheiro. Mapeados para a letra equivalente ("13o", "1a", "3a feira"), mantendo o comprimento.
+ */
+const ORDINALS: Record<string, string> = { 'º': 'o', 'ª': 'a', '°': 'o' };
+
 /** Minúsculas + sem acentos, preservando o comprimento (1 caractere de entrada => 1 de saída). */
 export function fold(input: string): string {
   let out = '';
   for (const ch of input.split('')) {
+    const ordinal = ORDINALS[ch];
+    if (ordinal) {
+      out += ordinal;
+      continue;
+    }
     const lower = ch.toLowerCase();
     const base = lower.normalize('NFD').replace(COMBINING, '');
     out += base.length === 1 ? base : lower.length === 1 ? lower : ch;

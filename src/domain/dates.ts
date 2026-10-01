@@ -39,6 +39,30 @@ export function isISODate(value: unknown): value is ISODate {
   return m >= 1 && m <= 12 && d >= 1 && d <= daysInMonth(y, m);
 }
 
+/** Primeiro ano aceito em datas digitadas pelo usuário. */
+export const MIN_PLAUSIBLE_YEAR = 1900;
+/** Quantos anos depois do ano corrente uma data digitada ainda é aceita. */
+export const MAX_YEARS_AHEAD = 10;
+
+/** Limites [min, max] de datas plausíveis para campos de data (também usados em `min`/`max` do <input type="date">). */
+export function plausibleDateRange(today: ISODate): { min: ISODate; max: ISODate } {
+  return {
+    min: makeISO(MIN_PLAUSIBLE_YEAR, 1, 1),
+    max: makeISO(parseISO(today).year + MAX_YEARS_AHEAD, 12, 31),
+  };
+}
+
+/**
+ * Data válida E plausível para um lançamento digitado: ano entre 1900 e o ano corrente + 10.
+ * Pega erros de digitação no ano (ex.: '0226-01-10' ou '2062-01-10'), que gravariam um lançamento
+ * que mexe no saldo mas fica escondido fora dos meses que o usuário navega.
+ */
+export function isPlausibleDate(value: unknown, today: ISODate): value is ISODate {
+  if (!isISODate(value)) return false;
+  const { min, max } = plausibleDateRange(today);
+  return value >= min && value <= max;
+}
+
 export function isMonthKey(value: unknown): value is MonthKey {
   return typeof value === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
 }
@@ -99,10 +123,6 @@ export function weekday(date: ISODate): number {
 
 export function monthKey(date: ISODate): MonthKey {
   return date.slice(0, 7);
-}
-
-export function currentMonthKey(now: Date = new Date()): MonthKey {
-  return monthKey(todayISO(now));
 }
 
 export function addMonthsToKey(key: MonthKey, months: number): MonthKey {
@@ -177,18 +197,6 @@ export function formatDateRelative(date: ISODate, today: ISODate): string {
   if (d === -1) return 'ontem';
   if (d === 1) return 'amanhã';
   return formatDateBR(date);
-}
-
-/** Converte 'DD/MM/AAAA' em ISODate (ou null). */
-export function parseDateBR(input: string): ISODate | null {
-  const m = input.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
-  if (!m) return null;
-  const day = Number(m[1]);
-  const month = Number(m[2]);
-  let year = Number(m[3]);
-  if (m[3].length === 2) year += 2000;
-  const iso = makeISO(year, month, day);
-  return isISODate(iso) ? iso : null;
 }
 
 export function nowTimestamp(): string {

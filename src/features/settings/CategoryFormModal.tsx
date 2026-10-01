@@ -106,7 +106,7 @@ export function CategoryFormModal({ category, initialKind, categories, onClose }
               O tipo não pode ser alterado depois de criada.
             </p>
           ) : (
-            <SegmentedControl aria-label="Tipo da categoria" options={KIND_OPTIONS} value={kind} onChange={setKind} className="self-start" />
+            <SegmentedControl mode="radio" aria-label="Tipo da categoria" options={KIND_OPTIONS} value={kind} onChange={setKind} className="self-start" />
           )}
         </div>
 

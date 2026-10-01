@@ -14,10 +14,21 @@ export interface ContributionModalProps {
   onClose: () => void;
   /** Chamado após registrar; `completed` = o aporte fez a meta atingir o alvo. */
   onDone?: (result: { completed: boolean }) => void;
+  /** Atalho para editar a meta e vincular a conta onde o dinheiro fica guardado (meta sem conta). */
+  onLinkAccount?: () => void;
 }
 
 /** Registrar aporte (com débito opcional em uma conta) ou resgate de uma meta. */
-export function ContributionModal({ goal, progress, mode, accounts, today, onClose, onDone }: ContributionModalProps) {
+export function ContributionModal({
+  goal,
+  progress,
+  mode,
+  accounts,
+  today,
+  onClose,
+  onDone,
+  onLinkAccount,
+}: ContributionModalProps) {
   const toast = useToast();
   const ids = { form: useId(), amount: useId(), date: useId(), note: useId(), account: useId() };
   const [amount, setAmount] = useState<Cents | null>(null);
@@ -30,7 +41,10 @@ export function ContributionModal({ goal, progress, mode, accounts, today, onClo
   const isDeposit = mode === 'aporte';
   const errors = validateContribution(mode, amount, progress.saved, date);
   const sources = accounts.filter((a) => !a.archived && a.type !== 'cartao_credito' && a.id !== goal.accountId);
-  const goalAccount = goal.accountId ? accounts.find((a) => a.id === goal.accountId) : undefined;
+  // Mesma regra do repositório (addGoalContribution): só transfere para uma conta existente e não arquivada.
+  const goalAccount = goal.accountId
+    ? accounts.find((a) => a.id === goal.accountId && !a.archived)
+    : undefined;
   const selected = sources.find((a) => a.id === fromAccountId);
 
   const shortcuts: { label: string; value: Cents }[] = [];
@@ -124,11 +138,29 @@ export function ContributionModal({ goal, progress, mode, accounts, today, onClo
             label="Debitar de uma conta (opcional)"
             htmlFor={ids.account}
             hint={
-              !selected
-                ? 'Sem conta, o aporte só é registrado na meta (seus saldos não mudam).'
-                : goalAccount
-                  ? `Será criada uma transferência de ${selected.name} para ${goalAccount.name}.`
-                  : `Será criada uma despesa em “Investimentos e reserva” na conta ${selected.name}.`
+              !selected ? (
+                'Sem conta, o aporte só é registrado na meta (seus saldos não mudam).'
+              ) : goalAccount ? (
+                `Será criada uma transferência de ${selected.name} para ${goalAccount.name}.`
+              ) : (
+                <>
+                  Será criada uma despesa em “Investimentos e reserva” na conta {selected.name}: o valor sai dos
+                  seus saldos e do patrimônio. Para mantê-lo no patrimônio, vincule à meta a conta onde ele fica
+                  guardado (ex.: Poupança).
+                  {onLinkAccount && (
+                    <>
+                      {' '}
+                      <button
+                        type="button"
+                        onClick={onLinkAccount}
+                        className="font-medium text-brand-700 underline dark:text-brand-400"
+                      >
+                        Vincular conta
+                      </button>
+                    </>
+                  )}
+                </>
+              )
             }
           >
             <Select id={ids.account} value={fromAccountId} onChange={(e) => setFromAccountId(e.target.value)}>

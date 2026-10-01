@@ -19,12 +19,6 @@ export const TRACK_META: Record<GoalTrack, { label: string; tone: BadgeTone }> =
   pausada: { label: 'Pausada', tone: 'info' },
 };
 
-export const PRIORITY_TONES: Record<Priority, BadgeTone> = {
-  alta: 'negative',
-  media: 'neutral',
-  baixa: 'neutral',
-};
-
 /** Emojis sugeridos no formulário de meta. */
 export const GOAL_EMOJIS = ['🎯', '🛟', '✈️', '🚗', '🏡', '🏖️', '🎓', '💍', '💻', '📱', '👶', '🐶', '🎸', '💰'];
 
@@ -124,16 +118,18 @@ export function goalTemplates(emergency: Pick<EmergencyFundStatus, 'target' | 't
 
 /**
  * Quanto guardar por mês para chegar ao alvo até o prazo (mesma regra de `goalProgress`):
- * meses = diferença entre o mês de hoje e o mês do prazo (mínimo 1). null sem alvo/prazo válidos ou prazo passado.
+ * meses = diferença entre o mês de hoje e o mês do prazo, mais o mês atual se ele ainda não teve aporte
+ * (`contributedThisMonth`, padrão false — meta nova); mínimo 1. null sem alvo/prazo válidos ou prazo passado.
  */
 export function monthlyPlan(
   target: Cents | null,
   saved: Cents,
   targetDate: ISODate | null,
   today: ISODate,
+  contributedThisMonth = false,
 ): { months: number; monthly: Cents } | null {
   if (target === null || target <= 0 || !targetDate || !isISODate(targetDate) || targetDate < today) return null;
-  const months = Math.max(1, diffMonths(monthKey(today), monthKey(targetDate)));
+  const months = Math.max(1, diffMonths(monthKey(today), monthKey(targetDate)) + (contributedThisMonth ? 0 : 1));
   const remaining = Math.max(0, target - saved);
   return { months, monthly: Math.ceil(remaining / months) };
 }
@@ -235,6 +231,9 @@ export type CoachTip =
 export function coachTip(p: GoalProgress): CoachTip | null {
   switch (p.track) {
     case 'no_ritmo':
+      // Meta recém-criada (ainda sem aportes) conta como no ritmo, mas a dica é de como começar.
+      if (p.saved === 0 && p.averageMonthlyContribution <= 0 && (p.requiredMonthly ?? 0) > 0)
+        return { kind: 'comecar', monthly: p.requiredMonthly ?? 0 };
       return { kind: 'no_ritmo' };
     case 'atrasada':
       if (p.saved === 0 && p.averageMonthlyContribution <= 0) return { kind: 'comecar', monthly: p.requiredMonthly ?? 0 };

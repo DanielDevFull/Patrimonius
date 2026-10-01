@@ -18,7 +18,10 @@ export interface CategoryHit {
   span: Span;
 }
 
-/** Palavras dos nomes de categoria que, sozinhas, não identificam nada. */
+/**
+ * Palavras dos nomes de categoria que, sozinhas, não identificam nada. "conta(s)" também é genérica: "me conta",
+ * "pagar as contas", "conta corrente" — "Contas da casa" só casa pelo nome completo ou por complemento (luz, água...).
+ */
 const GENERIC_NAME_TOKENS = new Set([
   'outras',
   'outros',
@@ -27,11 +30,19 @@ const GENERIC_NAME_TOKENS = new Set([
   'receitas',
   'receita',
   'pessoais',
+  'contas',
+  'conta',
 ]);
 /** Nomes de categoria que também são substantivos genéricos ("fiz compras no mercado"). */
 const GENERIC_CATEGORY_NAMES = new Set(['compras', 'contas']);
 /** Palavras comuns que nunca devem ser "corrigidas" para uma categoria por aproximação. */
 const FUZZY_STOP = new Set([
+  'despesa',
+  'despesas',
+  'receita',
+  'receitas',
+  'outras',
+  'outros',
   'gastei',
   'gastos',
   'gastar',
@@ -95,7 +106,8 @@ function vocabularyOf(c: Category): { phrase: string; source: CategoryHitSource 
   const out: { phrase: string; source: CategoryHitSource }[] = [];
   for (const k of c.keywords) out.push({ phrase: squash(fold(k)), source: 'palavra_chave' });
   for (const s of CATEGORY_SYNONYMS[c.id] ?? []) out.push({ phrase: s, source: 'sinonimo' });
-  return out.filter((v) => v.phrase.length > 0);
+  // Uma palavra genérica sozinha ("contas") não identifica a categoria.
+  return out.filter((v) => v.phrase.length > 0 && !GENERIC_NAME_TOKENS.has(v.phrase));
 }
 
 /**
@@ -150,8 +162,9 @@ export function scoreCategories(t: string, categories: Category[], kind?: Catego
     if (tk.text.length < 6 || FUZZY_STOP.has(tk.text) || allVocab.has(tk.text)) continue;
     if (hits.some((h) => h.span.start <= tk.start && tk.end <= h.span.end)) continue;
     for (const c of pool) {
+      // Palavras genéricas do nome ("Outras despesas") não servem de alvo: "despesas" não é a categoria "Outras despesas".
       const candidates = [...words(fold(c.name)), ...(vocabs.get(c.id) ?? []).map((v) => v.phrase)].filter(
-        (p) => !p.includes(' ') && p.length >= 6,
+        (p) => !p.includes(' ') && p.length >= 6 && !GENERIC_NAME_TOKENS.has(p),
       );
       if (candidates.some((p) => fuzzyScore(tk.text, p) >= 0.84)) {
         hits.push({ categoryId: c.id, score: 0.6, source: 'aproximado', span: tk });
@@ -242,25 +255,6 @@ export const ACCOUNT_TYPE_PATTERNS: [RegExp, AccountType][] = [
   ],
   [/\b(?:corrente|cc|debito)\b/, 'corrente'],
   [/\b(?:investimentos?|corretora|aplicacoes?)\b/, 'investimento'],
-];
-
-/** Palavras usadas para citar contas (para limpar descrições). */
-export const ACCOUNT_WORDS = [
-  'cartao',
-  'credito',
-  'debito',
-  'conta',
-  'corrente',
-  'poupanca',
-  'carteira',
-  'dinheiro',
-  'especie',
-  'pix',
-  'cc',
-  'fatura',
-  'investimento',
-  'investimentos',
-  'corretora',
 ];
 
 export function significantAccountTokens(account: Account): string[] {

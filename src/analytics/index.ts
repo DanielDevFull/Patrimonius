@@ -9,3 +9,4 @@ export * from './goals';
 export * from './networth';
 export * from './health';
 export * from './projections';
+export * from './targets';

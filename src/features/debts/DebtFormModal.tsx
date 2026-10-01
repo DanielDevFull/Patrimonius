@@ -82,9 +82,10 @@ export function DebtFormModal({ debt, payments, today, onClose }: DebtFormModalP
     const fields = debtFormToFields(values);
     try {
       if (debt) {
-        // Mantém o status coerente com o saldo quando o usuário informa um novo saldo/data.
+        // Mantém o status coerente com o saldo quando o usuário informa um novo saldo/data
+        // (mesma estimativa das telas: amortização mês a mês com os juros informados).
         const balanceChanged = fields.balance !== debt.balance || fields.balanceDate !== debt.balanceDate;
-        const remaining = fields.balance - paidSinceSnapshot;
+        const remaining = debtCurrentBalance({ ...debt, ...fields, status: 'ativa' }, payments);
         let status = debt.status;
         if (balanceChanged && debt.status === 'quitada' && remaining > 0) status = 'ativa';
         if (balanceChanged && debt.status === 'ativa' && remaining <= 0) status = 'quitada';
@@ -184,7 +185,7 @@ export function DebtFormModal({ debt, payments, today, onClose }: DebtFormModalP
             label="Data do saldo"
             htmlFor={ids.balanceDate}
             error={show('balanceDate')}
-            hint="Pagamentos registrados a partir desta data são descontados do saldo."
+            hint="Pagamentos registrados a partir desta data são descontados do saldo (com os juros de cada mês)."
           >
             <Input
               id={ids.balanceDate}
@@ -202,11 +203,11 @@ export function DebtFormModal({ debt, payments, today, onClose }: DebtFormModalP
             {paidSinceSnapshot > 0 && values.balanceDate && (
               <>
                 {' '}
-                (saldo informado menos <Money value={paidSinceSnapshot} /> pagos desde{' '}
-                {formatDateBR(values.balanceDate)})
+                (saldo informado{debt.interestRate > 0 ? ' mais os juros de cada mês' : ''} menos{' '}
+                <Money value={paidSinceSnapshot} /> pagos desde {formatDateBR(values.balanceDate)})
               </>
             )}
-            . Para atualizar com o extrato, informe o novo saldo e a data de hoje.
+            . É uma estimativa: confira com o extrato e, para atualizar, informe o novo saldo e a data de hoje.
           </p>
         )}
 

@@ -1,6 +1,19 @@
+import { Trash2 } from 'lucide-react';
 import { useId, useState, type FormEvent } from 'react';
-import { Badge, Button, Field, Input, Modal, Money, MoneyInput, cn, useToast } from '@/components/ui';
-import { revalueAsset } from '@/db/repo';
+import {
+  Badge,
+  Button,
+  Field,
+  IconButton,
+  Input,
+  Modal,
+  Money,
+  MoneyInput,
+  cn,
+  useConfirm,
+  useToast,
+} from '@/components/ui';
+import { deleteAssetValuation, revalueAsset } from '@/db/repo';
 import { formatDateBR } from '@/domain/dates';
 import type { Asset, AssetValuation, Cents, ISODate } from '@/domain/types';
 import { formatSignedPercent } from '@/domain/format';
@@ -23,9 +36,10 @@ function ChangeBadge({ ratio, diff }: { ratio: number | null; diff: Cents }) {
   );
 }
 
-/** Registra uma nova avaliação do bem e mostra o histórico de avaliações. */
+/** Registra uma nova avaliação do bem e mostra o histórico de avaliações (com exclusão de uma lançada errado). */
 export function RevalueModal({ asset, history, today, onClose }: RevalueModalProps) {
   const toast = useToast();
+  const confirm = useConfirm();
   const ids = { form: useId(), value: useId(), date: useId(), history: useId() };
   const [value, setValue] = useState<Cents | null>(null);
   const [date, setDate] = useState<string>(today);
@@ -36,6 +50,22 @@ export function RevalueModal({ asset, history, today, onClose }: RevalueModalPro
   const olderThanLatest = !!latest && !!date && date < latest.date;
   const diff = value !== null ? value - asset.value : null;
   const rows = valuationRows(history);
+
+  async function removeValuation(valuation: AssetValuation) {
+    const ok = await confirm({
+      title: 'Excluir avaliação?',
+      message: `A avaliação de ${formatDateBR(valuation.date)} sai do histórico; o valor atual passa a ser o da avaliação mais recente que sobrar.`,
+      confirmLabel: 'Excluir',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await deleteAssetValuation(valuation.id);
+      toast('Avaliação excluída.');
+    } catch {
+      toast('Não foi possível excluir a avaliação.', 'error');
+    }
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -136,6 +166,16 @@ export function RevalueModal({ asset, history, today, onClose }: RevalueModalPro
                 <span className="flex items-center gap-2">
                   <Money value={r.valuation.value} className="font-medium" />
                   {r.change !== null && <ChangeBadge ratio={r.ratio} diff={r.change} />}
+                  {rows.length > 1 && (
+                    <IconButton
+                      label={`Excluir avaliação de ${formatDateBR(r.valuation.date)}`}
+                      variant="danger"
+                      size="sm"
+                      onClick={() => void removeValuation(r.valuation)}
+                    >
+                      <Trash2 size={16} aria-hidden />
+                    </IconButton>
+                  )}
                 </span>
               </li>
             ))}

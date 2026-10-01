@@ -111,6 +111,11 @@ export function DebtCard({
         <p className="text-2xl font-bold text-slate-900 dark:text-white">
           <Money value={currentBalance} />
         </p>
+        {active && debt.interestRate > 0 && (
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            Estimativa com os juros de cada mês — confira no extrato.
+          </p>
+        )}
       </div>
 
       <dl className="grid grid-cols-2 gap-3">
@@ -203,7 +208,7 @@ export function DebtCard({
                       </p>
                     </div>
                     {p.transactionId && (
-                      <span title="Despesa lançada na conta" className="text-slate-400">
+                      <span title="Despesa lançada na conta" className="text-slate-500 dark:text-slate-400">
                         <Link2 size={14} aria-label="Despesa lançada na conta" />
                       </span>
                     )}

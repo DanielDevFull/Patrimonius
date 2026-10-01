@@ -5,6 +5,8 @@ import {
   type AssetType,
   type AssetValuation,
   type Cents,
+  type Debt,
+  type DebtPayment,
   type FinanceData,
   type ID,
   type ISODate,
@@ -32,13 +34,39 @@ function indexValuations(valuations: AssetValuation[]): Map<ID, AssetValuation[]
 
 /**
  * Valor de um bem em `asOf`: avaliação mais recente com date <= asOf; sem avaliação até asOf,
- * 0 se foi adquirido depois de asOf, senão acquisitionValue ?? value.
+ * 0 se foi adquirido depois de asOf; senão o valor da PRIMEIRA avaliação (o bem fica "plano" antes do cadastro,
+ * como as contas — um imóvel comprado em 2015 e cadastrado hoje não gera uma valorização falsa no mês do cadastro);
+ * sem nenhuma avaliação, acquisitionValue ?? value.
  */
 function assetValueAt(asset: Asset, valuations: AssetValuation[] | undefined, asOf: ISODate): Cents {
   const latest = valuations?.find((v) => v.date <= asOf);
   if (latest) return latest.value;
   if (asset.acquisitionDate !== null && asset.acquisitionDate > asOf) return 0;
-  return asset.acquisitionValue ?? asset.value;
+  const earliest = valuations?.[valuations.length - 1];
+  return earliest ? earliest.value : (asset.acquisitionValue ?? asset.value);
+}
+
+/**
+ * Bem conta no patrimônio em `asOf`? Não arquivado => sim. Arquivado => só antes de `archivedAt` (vendido, por
+ * exemplo: o histórico anterior continua com ele). Arquivado antes de existir archivedAt (dados antigos) => até a
+ * data da última avaliação.
+ */
+function assetCountsAt(asset: Asset, valuations: AssetValuation[] | undefined, asOf: ISODate): boolean {
+  if (!asset.archived) return true;
+  if (asset.archivedAt) return asOf < asset.archivedAt;
+  const last = valuations?.[0];
+  return last !== undefined && asOf <= last.date;
+}
+
+/**
+ * Data em que uma dívida 'quitada' foi quitada: a do último pagamento com date >= balanceDate; sem pagamentos,
+ * a da última alteração (marcada como quitada à mão).
+ */
+function payoffDateOf(debt: Debt, payments: DebtPayment[]): ISODate {
+  let last: ISODate | null = null;
+  for (const p of payments)
+    if (p.debtId === debt.id && p.date >= debt.balanceDate && (last === null || p.date > last)) last = p.date;
+  return last ?? debt.updatedAt.slice(0, 10);
 }
 
 function computeNetWorth(
@@ -62,8 +90,9 @@ function computeNetWorth(
   const byType = new Map<AssetType, Cents>();
   let assetsTotal = 0;
   for (const asset of data.assets) {
-    if (asset.archived) continue;
-    const value = assetValueAt(asset, valuationsByAsset.get(asset.id), asOf);
+    const valuations = valuationsByAsset.get(asset.id);
+    if (!assetCountsAt(asset, valuations, asOf)) continue;
+    const value = assetValueAt(asset, valuations, asOf);
     assetsTotal += value;
     byType.set(asset.type, (byType.get(asset.type) ?? 0) + value);
   }
@@ -74,8 +103,10 @@ function computeNetWorth(
 
   let debtsTotal = 0;
   for (const debt of data.debts) {
-    if (debt.status !== 'ativa') continue;
-    debtsTotal += debtCurrentBalance(debt, data.debtPayments, asOf);
+    if (debt.status === 'ativa') debtsTotal += debtCurrentBalance(debt, data.debtPayments, asOf);
+    // Quitada: o passado continua com a dívida até a quitação (pagar uma dívida não muda o patrimônio).
+    else if (asOf < payoffDateOf(debt, data.debtPayments))
+      debtsTotal += debtCurrentBalance({ ...debt, status: 'ativa' }, data.debtPayments, asOf);
   }
 
   const totalAssets = accountsPositive + assetsTotal;
@@ -97,9 +128,10 @@ function computeNetWorth(
 /**
  * Patrimônio líquido em `asOf`:
  * - contas com includeInNetWorth (arquivadas só se saldo != 0): saldo pago até asOf; positivos somam ativos, negativos passivos;
- * - bens não arquivados: valor da avaliação mais recente com date <= asOf; sem avaliação até asOf:
- *   se acquisitionDate > asOf => 0; senão acquisitionValue ?? value;
- * - dívidas ativas: debtCurrentBalance(debt, payments, asOf).
+ * - bens (arquivados só antes de archivedAt): valor da avaliação mais recente com date <= asOf; sem avaliação até
+ *   asOf: se acquisitionDate > asOf => 0; senão o valor da primeira avaliação (sem avaliações: acquisitionValue ?? value);
+ * - dívidas ativas: debtCurrentBalance(debt, payments, asOf); quitadas entram do mesmo jeito antes da data da
+ *   quitação (último pagamento; sem pagamentos, a data da última alteração) — o histórico não é reescrito.
  *
  * Detalhes: `accounts` segue a ordem de data.accounts; `byAssetType` lista só tipos com total != 0, por total desc.
  * Avaliações na mesma data: vale a criada por último (como em revalueAsset).

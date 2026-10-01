@@ -7,7 +7,14 @@ import { budgetStatuses, suggestBudgets } from './budgets';
 import { debtsOverview } from './debts';
 import { goalsOverview } from './goals';
 import { isFlow } from './internal/common';
-import { averageMonthlyExpense, averageMonthlyIncome, monthlySeries } from './summary';
+import {
+  averageMonthlyExpense,
+  averageMonthlyIncome,
+  expenseTrackingStart,
+  monthCoverage,
+  monthlySeries,
+} from './summary';
+import { REFERENCE_SAVINGS_PCT, savingsTargetPct } from './targets';
 import type {
   EmergencyFundLevel,
   EmergencyFundStatus,
@@ -27,7 +34,6 @@ const ESSENTIAL_SHARE_OF_EXPENSE = 0.6;
 /** Fração da renda estimada usada como custo essencial quando não há despesas registradas. */
 const ESSENTIAL_SHARE_OF_INCOME = 0.5;
 const DEFAULT_EMERGENCY_MONTHS = 6;
-const DEFAULT_SAVINGS_TARGET = 20;
 /** Comprometimento da renda com parcelas: até 10% => nota 100; a partir de 50% => nota 0. */
 const DEBT_RATIO_BEST = 0.1;
 const DEBT_RATIO_WORST = 0.5;
@@ -92,36 +98,69 @@ function joinNames(names: string[], noun: [string, string]): string {
  * Situação da reserva de emergência (ver EmergencyFundStatus).
  * monthlyEssential: média mensal de despesas em categorias do grupo 'necessidades' nos 3 meses completos anteriores
  * ao mês de today; se 0 => 60% da média de despesas totais; se 0 => 50% de settings.monthlyIncomeEstimate; senão 0.
+ * Com pouco histórico (menos de 3 meses completos com lançamentos), 50% da renda estimada (se informada) é o piso:
+ * um único gasto do mês passado não vira o "custo de vida".
  * level: sem_dados (monthlyEssential = 0), critica (< 1 mês), baixa (< 3), parcial (< target), completa.
  *
- * Detalhes: `reserve` = max(0, soma dos saldos dessas contas) — um cheque especial negativo reduz a reserva.
- * As médias ignoram meses sem nenhum lançamento (como averageMonthlyExpense). 'completa' vale sempre que
- * reserve >= target (portanto gap = 0 ⇔ completa, mesmo com meta menor que 3 meses).
+ * Detalhes: `reserve` = max(0, soma dos saldos das contas não arquivadas, incluídas no patrimônio, dos tipos corrente,
+ * poupança, carteira e investimento) — um cheque especial negativo reduz a reserva; dinheiro de terceiros
+ * (includeInNetWorth = false) não conta. As médias ignoram meses sem nenhum lançamento (como averageMonthlyExpense)
+ * e não tratam o mês em que o registro começou como mês completo (expenseTrackingStart/monthCoverage). Sem renda
+ * estimada e com menos de 1 mês completo de dados (o único mês com dados é esse mês parcial), uma reserva que
+ * pareceria completa é tratada como sem_dados — não há base para afirmar isso. 'completa' vale sempre que reserve >= target
+ * (portanto gap = 0 ⇔ completa, mesmo com meta menor que 3 meses).
  */
 export function emergencyFund(data: FinanceData, today: ISODate): EmergencyFundStatus {
-  const accounts = data.accounts.filter((a) => !a.archived && RESERVE_ACCOUNT_TYPES.includes(a.type));
+  const accounts = data.accounts.filter(
+    (a) => !a.archived && a.includeInNetWorth && RESERVE_ACCOUNT_TYPES.includes(a.type),
+  );
   const balances = accountBalances(accounts, data.transactions, { asOf: today });
   let total = 0;
   for (const account of accounts) total += balances[account.id] ?? 0;
   const reserve = Math.max(0, total);
 
   const month = monthKey(today);
+  const trackingStart = expenseTrackingStart(data);
   const essentialIds = data.categories
     .filter((c) => c.kind === 'despesa' && c.group === 'necessidades')
     .map((c) => c.id);
-  let monthlyEssential = averageMonthlyExpense(data.transactions, month, HISTORY_MONTHS, essentialIds);
+  let monthlyEssential = averageMonthlyExpense(
+    data.transactions,
+    month,
+    HISTORY_MONTHS,
+    essentialIds,
+    trackingStart,
+  );
   if (monthlyEssential <= 0)
     monthlyEssential = Math.round(
-      averageMonthlyExpense(data.transactions, month, HISTORY_MONTHS) * ESSENTIAL_SHARE_OF_EXPENSE,
+      averageMonthlyExpense(data.transactions, month, HISTORY_MONTHS, undefined, trackingStart) *
+        ESSENTIAL_SHARE_OF_EXPENSE,
     );
-  if (monthlyEssential <= 0) {
-    const estimate = data.settings.monthlyIncomeEstimate;
-    monthlyEssential =
-      estimate !== null && estimate > 0 ? Math.round(estimate * ESSENTIAL_SHARE_OF_INCOME) : 0;
+
+  const window = new Set<MonthKey>(lastMonths(addMonthsToKey(month, -1), HISTORY_MONTHS));
+  const monthsWithData = new Set<MonthKey>();
+  for (const tx of data.transactions) {
+    const key = monthKey(tx.date);
+    if (isFlow(tx) && window.has(key)) monthsWithData.add(key);
   }
+  const estimate = data.settings.monthlyIncomeEstimate;
+  const estimatedEssential =
+    estimate !== null && estimate > 0 ? Math.round(estimate * ESSENTIAL_SHARE_OF_INCOME) : 0;
+  if (monthsWithData.size < HISTORY_MONTHS) monthlyEssential = Math.max(monthlyEssential, estimatedEssential);
+  // Menos de 1 mês completo de histórico: o único mês com dados é o mês (parcial) em que o registro começou.
+  const lessThanOneMonth =
+    monthsWithData.size <= 1 &&
+    trackingStart !== undefined &&
+    window.has(monthKey(trackingStart)) &&
+    monthCoverage(monthKey(trackingStart), trackingStart) < 1;
 
   const targetMonths = positiveOr(data.settings.emergencyFundTargetMonths, DEFAULT_EMERGENCY_MONTHS);
-  const target = Math.round(monthlyEssential * targetMonths);
+  let target = Math.round(monthlyEssential * targetMonths);
+  if (estimatedEssential === 0 && lessThanOneMonth && reserve >= target) {
+    // Sem renda informada e com poucos dias de gastos, "reserva completa" seria um palpite: pede mais dados.
+    monthlyEssential = 0;
+    target = 0;
+  }
   const monthsCovered = monthlyEssential > 0 ? reserve / monthlyEssential : null;
 
   let level: EmergencyFundLevel;
@@ -152,21 +191,38 @@ function component(key: HealthComponent['key'], result: ComponentResult): Health
   return { key, label: LABELS[key], weight: WEIGHTS[key], ...result };
 }
 
-/** Taxa de poupança agregada dos meses completos com dados, comparada à meta das configurações. */
-function savingsComponent(history: MonthSummary[], data: FinanceData): ComponentResult {
-  const targetPct = positiveOr(data.settings.savingsRateTarget, DEFAULT_SAVINGS_TARGET);
+/**
+ * Taxa de poupança agregada dos meses completos com dados, comparada à meta das configurações
+ * (savingsTargetPct). Sem meta definida (0%), a régua é a referência da regra 50/30/20 (REFERENCE_SAVINGS_PCT),
+ * e as dicas citam a regra, não "sua meta".
+ * Sem receitas nos meses completos, mas com renda no mês corrente (ou renda estimada e nenhum mês completo com
+ * dados), ainda não dá para medir — neutro (50), sem afirmar que não há renda.
+ */
+function savingsComponent(history: MonthSummary[], data: FinanceData, month: MonthKey): ComponentResult {
+  const goalPct = savingsTargetPct(data.settings);
+  const targetPct = goalPct ?? REFERENCE_SAVINGS_PCT;
+  const pctText = `${formatNumber(targetPct)}%`;
   let income = 0;
   let saved = 0;
   for (const m of history) {
     income += m.income;
     saved += m.net + m.invested;
   }
-  if (income <= 0)
+  if (income <= 0) {
+    const currentIncome = data.transactions.some((tx) => tx.type === 'receita' && monthKey(tx.date) === month);
+    const estimate = data.settings.monthlyIncomeEstimate ?? 0;
+    if (currentIncome || (estimate > 0 && history.length === 0))
+      return {
+        score: 50,
+        value: 'Aguardando um mês completo',
+        tip: 'Ainda não há um mês completo com receitas registradas: quando ele fechar, o Pat calcula quanto da renda você conseguiu poupar.',
+      };
     return {
       score: 0,
       value: 'Sem renda registrada',
       tip: 'Registre suas receitas (salário, renda extra) para o Pat medir quanto você consegue poupar todo mês.',
     };
+  }
   const rate = saved / income;
   const score = clampScore(((rate * 100) / targetPct) * 100);
   const value = `${formatPct(rate)} da renda`;
@@ -182,13 +238,13 @@ function savingsComponent(history: MonthSummary[], data: FinanceData): Component
     return {
       score,
       value,
-      tip: `Para chegar à meta de ${formatNumber(targetPct)}% da renda, poupe mais ${formatBRL(missing)} por mês — separe esse valor assim que receber.`,
+      tip: `Para chegar ${goalPct !== null ? `à meta de ${pctText} da renda` : `aos ${pctText} da renda sugeridos pela regra 50/30/20`}, poupe mais ${formatBRL(missing)} por mês — separe esse valor assim que receber.`,
     };
   }
   return {
     score,
     value,
-    tip: `Você poupa acima da meta de ${formatNumber(targetPct)}%. Direcione a sobra para a reserva de emergência e para suas metas.`,
+    tip: `Você poupa acima ${goalPct !== null ? `da meta de ${pctText}` : `dos ${pctText} sugeridos pela regra 50/30/20`}. Direcione a sobra para a reserva de emergência e para suas metas.`,
   };
 }
 
@@ -342,7 +398,8 @@ function cashflowComponent(history: MonthSummary[]): ComponentResult {
       value: 'Sem histórico',
       tip: 'Registre suas receitas e despesas: o Pat avalia o fluxo de caixa ao fim de cada mês.',
     };
-  const negative = history.filter((m) => m.net <= 0);
+  // Aportes em Investimentos e reserva são dinheiro poupado, não gasto (como na taxa de poupança).
+  const negative = history.filter((m) => m.net + m.invested <= 0);
   const positive = history.length - negative.length;
   const score = clampScore((positive / history.length) * 100);
   const value = `${positive} de ${plural(history.length, 'mês', 'meses')} no azul`;
@@ -377,13 +434,15 @@ function gradeOf(score: number): HealthGrade {
  * dataQuality: 'insuficiente' (< 1 mês com lançamentos), 'parcial' (1-2), 'boa' (>= 3) nos últimos 3 meses completos + atual.
  *
  * Componentes (meses completos = os 3 anteriores ao mês de today; meses sem lançamentos são ignorados):
- * - poupanca: taxa de poupança agregada (Σ(net + invested) / Σ renda) ÷ meta × 100; sem renda => 0.
+ * - poupanca: taxa de poupança agregada (Σ(net + invested) / Σ renda) ÷ meta × 100; sem renda => 0 (50 se já há
+ *   receita no mês corrente, ou renda estimada sem meses completos: ainda falta um mês completo para medir).
  * - reserva: monthsCovered / targetMonths × 100; sem dados de gastos => 0.
  * - dividas: Σ mínimos das dívidas ativas ÷ renda média (3 meses completos; fallback: renda estimada).
  *   <= 10% => 100, >= 50% => 0, linear entre eles; sem dívidas => 100; com dívidas e sem renda => 0.
  * - orcamento: % de orçamentos não estourados no último mês completo; sem orçamentos ou sem lançamentos nesse mês => 50.
  * - metas: % das metas em andamento no ritmo ('no_ritmo', ou 'sem_prazo' com aportes recentes); sem metas => 50.
- * - fluxo: % dos meses completos com dados que fecharam com receita - despesa > 0; sem histórico => 0.
+ * - fluxo: % dos meses completos com dados que fecharam com receita - despesa + investido > 0 (aportes em
+ *   Investimentos e reserva não contam como gasto); sem histórico => 0.
  * score = round(Σ score × peso / 100); grade: >= 80 excelente, >= 65 boa, >= 50 regular, >= 35 atencao, senão critica.
  */
 export function financialHealth(data: FinanceData, today: ISODate): HealthReport {
@@ -398,7 +457,7 @@ export function financialHealth(data: FinanceData, today: ISODate): HealthReport
     recordedIncome > 0 ? recordedIncome : estimate !== null && estimate > 0 ? estimate : 0;
 
   const components: HealthComponent[] = [
-    component('poupanca', savingsComponent(history, data)),
+    component('poupanca', savingsComponent(history, data, month)),
     component('reserva', reserveComponent(emergencyFund(data, today))),
     component('dividas', debtsComponent(data, averageIncome)),
     component('orcamento', budgetComponent(data, today, lastComplete)),

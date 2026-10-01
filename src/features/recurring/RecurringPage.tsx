@@ -176,6 +176,7 @@ export default function RecurringPage() {
           actions={
             data.recurring.length > 0 ? (
               <SegmentedControl
+                mode="radio"
                 aria-label="Filtrar recorrências"
                 options={FILTER_OPTIONS}
                 value={filter}
@@ -288,31 +289,34 @@ function RuleRow({ rule, category, account, due, today, onEdit, onToggle, onDele
         >
           {category?.icon ?? '❔'}
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-            {rule.description}
-          </span>
-          <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
-            {category?.name ?? 'Sem categoria'} • {account?.name ?? 'Conta removida'} •{' '}
-            {FREQUENCY_LABELS[rule.frequency]}
-          </span>
-          <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
-            {rule.active && due && <span>Próxima: {dueLabel(due, today)}</span>}
-            {rule.active && !ended && <Badge tone="positive">Ativa</Badge>}
-            {!rule.active && <Badge tone="neutral">Pausada</Badge>}
-            {ended && <Badge tone="neutral">Encerrada</Badge>}
-            {rule.autoGenerate && <Badge tone="info">Automática</Badge>}
-            {due?.overdue && <Badge tone="negative">Atrasada</Badge>}
-          </span>
-        </span>
-        <span className="shrink-0 text-right text-sm font-semibold">
-          <Money value={signed} signed colored />
-          {rule.frequency !== 'mensal' && (
-            <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
-              ≈ <Money value={monthly} />
-              /mês
+        {/* No celular o valor desce para baixo do texto, que fica com a largura toda. */}
+        <span className="flex min-w-0 flex-1 flex-wrap items-start gap-x-3 gap-y-1">
+          <span className="min-w-[min(100%,11rem)] flex-1 basis-44">
+            <span className="line-clamp-2 text-sm font-medium break-words text-slate-900 sm:line-clamp-1 dark:text-slate-100">
+              {rule.description}
             </span>
-          )}
+            <span className="block text-xs break-words text-slate-500 dark:text-slate-400">
+              {category?.name ?? 'Sem categoria'} • {account?.name ?? 'Conta removida'} •{' '}
+              {FREQUENCY_LABELS[rule.frequency]}
+            </span>
+            <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
+              {rule.active && due && <span>Próxima: {dueLabel(due, today)}</span>}
+              {rule.active && !ended && <Badge tone="positive">Ativa</Badge>}
+              {!rule.active && <Badge tone="neutral">Pausada</Badge>}
+              {ended && <Badge tone="neutral">Encerrada</Badge>}
+              {rule.autoGenerate && <Badge tone="info">Automática</Badge>}
+              {due?.overdue && <Badge tone="negative">Atrasada</Badge>}
+            </span>
+          </span>
+          <span className="ml-auto shrink-0 text-right text-sm font-semibold">
+            <Money value={signed} signed colored />
+            {rule.frequency !== 'mensal' && (
+              <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
+                ≈ <Money value={monthly} />
+                /mês
+              </span>
+            )}
+          </span>
         </span>
       </button>
       <ActionsMenu
@@ -340,7 +344,7 @@ function CandidateRow({
 }) {
   const signed = candidate.type === 'receita' ? candidate.amount : -candidate.amount;
   return (
-    <li className="flex flex-wrap items-center gap-3 py-3">
+    <li className="flex items-start gap-3 py-3">
       <span
         aria-hidden
         className="flex size-10 shrink-0 items-center justify-center rounded-full text-lg"
@@ -348,26 +352,31 @@ function CandidateRow({
       >
         {category?.icon ?? '❔'}
       </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-          {candidate.description}
-        </p>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          {category?.name ?? 'Sem categoria'} • {plural(candidate.occurrences, 'ocorrência', 'ocorrências')} •
-          última em {formatDateBR(candidate.lastDate)}
-        </p>
+      {/* No celular o texto ocupa a linha toda e valor + "Cadastrar" descem para a linha de baixo. */}
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="min-w-[min(100%,12rem)] flex-1 basis-48">
+          <p className="text-sm font-medium break-words text-slate-900 dark:text-slate-100">
+            {candidate.description}
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {category?.name ?? 'Sem categoria'} • {plural(candidate.occurrences, 'ocorrência', 'ocorrências')} •
+            última em {formatDateBR(candidate.lastDate)}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="text-sm font-semibold">
+            <Money value={signed} signed colored />
+          </span>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={onRegister}
+            aria-label={`Cadastrar ${candidate.description} como recorrência`}
+          >
+            Cadastrar
+          </Button>
+        </div>
       </div>
-      <span className="text-sm font-semibold">
-        <Money value={signed} signed colored />
-      </span>
-      <Button
-        size="sm"
-        variant="secondary"
-        onClick={onRegister}
-        aria-label={`Cadastrar ${candidate.description} como recorrência`}
-      >
-        Cadastrar
-      </Button>
     </li>
   );
 }

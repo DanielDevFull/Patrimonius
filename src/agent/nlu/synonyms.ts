@@ -98,6 +98,12 @@ export const CATEGORY_SYNONYMS: Record<string, string[]> = {
     'pneu',
     'troca de oleo',
     'revisao do carro',
+    // "conserto" sozinho é Moradia; com o veículo, Transporte (frase mais longa vence).
+    'conserto do carro',
+    'conserto no carro',
+    'conserto da moto',
+    'conserto na moto',
+    'funilaria',
     'lava jato',
     'lavagem do carro',
     'licenciamento',

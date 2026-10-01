@@ -3,7 +3,7 @@
  * O arquivo de backup é gerado no próprio navegador (Blob) e baixado pelo usuário; nada é enviado pela rede.
  */
 import { formatDateBR, isISODate, isMonthKey, nowTimestamp, todayISO } from '@/domain/dates';
-import { buildDefaultSettings } from '@/domain/defaults';
+import { COLOR_PALETTE, buildDefaultSettings } from '@/domain/defaults';
 import type { Account, Category, Cents, ISODate, Settings, Transaction } from '@/domain/types';
 import { DATA_TABLES, db, type DataTableName } from './db';
 import { ensureInitialized } from './repo';
@@ -168,6 +168,14 @@ function nullableDate(field: string): RecordCheck {
   return (r) => (r[field] === null || isISODate(r[field]) ? null : `data inválida em "${field}" (use AAAA-MM-DD)`);
 }
 
+/** Campo opcional (ausente em backups antigos): ausente, null ou data válida. */
+function optionalDate(field: string): RecordCheck {
+  return (r) =>
+    r[field] === undefined || r[field] === null || isISODate(r[field])
+      ? null
+      : `data inválida em "${field}" (use AAAA-MM-DD)`;
+}
+
 function oneOf(field: string, values: readonly string[], nullable = false): RecordCheck {
   return (r) => {
     const v = r[field];
@@ -245,7 +253,13 @@ const TABLE_CHECKS: Record<DataTableName, RecordCheck> = {
     oneOf('status', ENUMS.debtStatus),
   ),
   debtPayments: all(nonEmptyStr('debtId'), int('amount', { min: 1 }), date('date'), nullableStr('transactionId')),
-  assets: all(str('name'), oneOf('type', ENUMS.assetType), int('value', { min: 0 }), bool('archived')),
+  assets: all(
+    str('name'),
+    oneOf('type', ENUMS.assetType),
+    int('value', { min: 0 }),
+    bool('archived'),
+    optionalDate('archivedAt'),
+  ),
   assetValuations: all(nonEmptyStr('assetId'), int('value', { min: 0 }), date('date')),
   settings: all(
     (r) => (r.id === 'settings' ? null : 'registro de configurações deve ter id "settings"'),
@@ -328,31 +342,216 @@ export function backupCounts(backup: BackupFile): Record<DataTableName, number> 
 /* Importação / limpeza                                                */
 /* ------------------------------------------------------------------ */
 
-/** Completa campos que possam faltar em backups de versões antigas. */
+/**
+ * Completa campos que possam faltar em backups de versões antigas e troca pelo padrão os que vierem com tipo errado
+ * (ex.: `userName: null` num backup editado à mão derrubava a tela de Configurações).
+ */
 function normalizeSettings(rows: unknown[]): unknown[] {
   return rows.map((row) => {
     const defaults: Settings = buildDefaultSettings(nowTimestamp());
-    return { ...defaults, ...(row as Partial<Settings>), id: 'settings' };
+    const merged: Rec = { ...defaults, ...(row as Rec), id: 'settings' };
+    for (const [field, valid] of SETTINGS_FIELDS) {
+      if (!valid(merged[field])) merged[field] = defaults[field];
+    }
+    return merged;
   });
+}
+
+/** [campo, valor aceito?, valor padrão]: campos que o app usa mas a validação não exige (ícones, cores, notas...). */
+type FieldDefault = readonly [field: string, valid: (v: unknown) => boolean, fallback: (row: Rec, now: string) => unknown];
+
+const isText = (v: unknown) => typeof v === 'string';
+const isBoolean = (v: unknown) => typeof v === 'boolean';
+const isNullableInt = (v: unknown) => v === null || isInt(v);
+const isNullableText = (v: unknown) => v === null || typeof v === 'string';
+const isNullableDate = (v: unknown) => v === null || isISODate(v);
+const isPresent = (v: unknown) => v !== undefined;
+const isTextList = (v: unknown) => Array.isArray(v) && v.every((x) => typeof x === 'string');
+const isNumberAtLeastZero = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+const always = (value: unknown) => (): unknown => value;
+
+/** Campos das configurações e o tipo aceito (o resto volta ao padrão em normalizeSettings). */
+const SETTINGS_FIELDS: readonly (readonly [keyof Settings, (v: unknown) => boolean])[] = [
+  ['userName', isText],
+  ['agentName', isText],
+  ['emergencyFundTargetMonths', isNumberAtLeastZero],
+  ['savingsRateTarget', isNumberAtLeastZero],
+  ['monthlyIncomeEstimate', isNullableInt],
+  ['theme', (v) => typeof v === 'string' && (ENUMS.theme as readonly string[]).includes(v)],
+  ['onboardingDone', isBoolean],
+  ['hideValues', isBoolean],
+  ['dismissedInsights', isRecord],
+  ['createdAt', isText],
+  ['updatedAt', isText],
+];
+const stamp = (_row: Rec, now: string) => now;
+const FALLBACK_COLOR = COLOR_PALETTE[0];
+
+const ENTITY_STAMPS: readonly FieldDefault[] = [
+  ['createdAt', isText, stamp],
+  ['updatedAt', isText, stamp],
+];
+const CREATED_STAMP: readonly FieldDefault[] = [['createdAt', isText, stamp]];
+
+/** Padrões por tabela (mesmo papel de normalizeSettings para as demais tabelas). */
+const TABLE_DEFAULTS: Partial<Record<DataTableName, readonly FieldDefault[]>> = {
+  accounts: [
+    ['icon', isText, always('')],
+    ['color', isText, always(FALLBACK_COLOR)],
+    ['archived', isBoolean, always(false)],
+    ['includeInNetWorth', isBoolean, always(true)],
+    ['closingDay', isNullableInt, always(null)],
+    ['dueDay', isNullableInt, always(null)],
+    ...ENTITY_STAMPS,
+  ],
+  categories: [
+    ['icon', isText, always('')],
+    ['color', isText, always(FALLBACK_COLOR)],
+    ['keywords', isTextList, () => []],
+    ['archived', isBoolean, always(false)],
+    ...ENTITY_STAMPS,
+  ],
+  transactions: [
+    ['notes', isText, always('')],
+    ['recurringId', isNullableText, always(null)],
+    ['installment', isPresent, always(null)],
+    ...ENTITY_STAMPS,
+  ],
+  recurring: [
+    // Sem a informação, não gera lançamentos sozinha (o usuário liga no formulário se quiser).
+    ['autoGenerate', isBoolean, always(false)],
+    ['active', isBoolean, always(true)],
+    ...ENTITY_STAMPS,
+  ],
+  budgets: ENTITY_STAMPS,
+  goals: [
+    ['icon', isText, always('')],
+    ['color', isText, always(FALLBACK_COLOR)],
+    ['notes', isText, always('')],
+    ...ENTITY_STAMPS,
+  ],
+  goalContributions: [['note', isText, always('')], ...CREATED_STAMP],
+  debts: [
+    ['creditor', isText, always('')],
+    ['originalAmount', isInt, (row) => row.balance],
+    ['dueDay', isNullableInt, always(null)],
+    ['remainingInstallments', isNullableInt, always(null)],
+    ['notes', isText, always('')],
+    ...ENTITY_STAMPS,
+  ],
+  debtPayments: [['note', isText, always('')], ...CREATED_STAMP],
+  assets: [
+    ['acquisitionValue', isNullableInt, always(null)],
+    ['acquisitionDate', isNullableDate, always(null)],
+    ['notes', isText, always('')],
+    ...ENTITY_STAMPS,
+  ],
+  assetValuations: CREATED_STAMP,
+  chat: [['payload', isPresent, always(null)], ...CREATED_STAMP],
+};
+
+/**
+ * Completa/corrige campos que o app usa e a validação não exige (ex.: backup editado à mão sem o ícone de uma
+ * categoria, que derrubaria os textos do agente). Registros completos são devolvidos sem alteração.
+ */
+function normalizeRows(name: DataTableName, rows: unknown[], now: string): unknown[] {
+  if (name === 'settings') return normalizeSettings(rows);
+  const defaults = TABLE_DEFAULTS[name];
+  if (!defaults) return rows;
+  return rows.map((row) => {
+    const r = row as Rec;
+    let fixed: Rec | null = null;
+    for (const [field, valid, fallback] of defaults) {
+      if (valid(r[field])) continue;
+      fixed ??= { ...r };
+      fixed[field] = fallback(r, now);
+    }
+    return fixed ?? r;
+  });
+}
+
+/** Mapa id removido -> id que ficou: um registro por chave; `better(a, b)` = `a` deve ficar no lugar de `b`. */
+function duplicatesByKey<T extends { id: string }>(
+  rows: T[],
+  key: (row: T) => string,
+  better: (a: T, b: T) => boolean,
+): Map<string, string> {
+  const winners = new Map<string, T>();
+  const losers: [id: string, key: string][] = [];
+  for (const row of rows) {
+    const k = key(row);
+    const current = winners.get(k);
+    if (!current) winners.set(k, row);
+    else if (better(row, current)) {
+      losers.push([current.id, k]);
+      winners.set(k, row);
+    } else losers.push([row.id, k]);
+  }
+  return new Map(losers.map(([id, k]) => [id, winners.get(k)?.id ?? id]));
+}
+
+/**
+ * Mesclar: une registros EQUIVALENTES com ids diferentes (ex.: backups de dois aparelhos que partiram do mesmo
+ * arquivo) — a mesma ocorrência de recorrência (regra + data), gerada com um id em cada aparelho, e o mesmo
+ * orçamento (categoria + mês). Fica um só: na ocorrência, o pago antes do pendente; depois o editado por último;
+ * no empate, o do arquivo. Aportes/pagamentos que apontavam para um lançamento removido passam a apontar para o que
+ * ficou. Roda dentro da transação da importação.
+ */
+async function unifyEquivalentRecords(fileIds: Set<string>): Promise<void> {
+  const newer = (a: { id: string; updatedAt: string }, b: { id: string; updatedAt: string }) =>
+    a.updatedAt !== b.updatedAt ? a.updatedAt > b.updatedAt : fileIds.has(a.id) && !fileIds.has(b.id);
+
+  const generated = await db.transactions.filter((t) => t.recurringId !== null).toArray();
+  const txRemap = duplicatesByKey(
+    generated,
+    (t) => `${t.recurringId}|${t.date}`,
+    (a, b) => (a.status !== b.status ? a.status === 'pago' : newer(a, b)),
+  );
+  if (txRemap.size > 0) {
+    await db.transactions.bulkDelete([...txRemap.keys()]);
+    const relink = (link: { transactionId: string | null }) => {
+      if (link.transactionId !== null) link.transactionId = txRemap.get(link.transactionId) ?? link.transactionId;
+    };
+    const points = (link: { transactionId: string | null }) =>
+      link.transactionId !== null && txRemap.has(link.transactionId);
+    await db.goalContributions.filter(points).modify(relink);
+    await db.debtPayments.filter(points).modify(relink);
+  }
+
+  const budgetRemap = duplicatesByKey(
+    await db.budgets.toArray(),
+    (b) => `${b.categoryId}|${b.month ?? 'padrão'}`,
+    newer,
+  );
+  if (budgetRemap.size > 0) await db.budgets.bulkDelete([...budgetRemap.keys()]);
 }
 
 /**
  * Importa um backup já validado.
  * - 'replace': apaga TODAS as tabelas e grava o conteúdo do backup (uma única transação: tudo ou nada);
- * - 'merge': grava por cima dos dados atuais (registros com o mesmo id são substituídos; os demais são mantidos).
- * Ao final garante categorias padrão e configurações. Retorna o total de registros gravados.
+ * - 'merge': grava por cima dos dados atuais (registros com o mesmo id são substituídos; os demais são mantidos) e
+ *   une registros equivalentes com ids diferentes (mesma ocorrência de recorrência, mesmo orçamento).
+ * Campos não essenciais ausentes recebem valores padrão. Ao final garante categorias padrão e configurações.
+ * Retorna o total de registros gravados.
  */
 export async function importBackup(backup: BackupFile, mode: ImportMode): Promise<number> {
   let total = 0;
+  const now = nowTimestamp();
   await db.transaction('rw', db.tables, async () => {
     if (mode === 'replace') {
       await Promise.all(db.tables.map((t) => t.clear()));
     }
     for (const name of DATA_TABLES) {
-      const rows = name === 'settings' ? normalizeSettings(backup.data[name]) : backup.data[name];
+      const rows = normalizeRows(name, backup.data[name], now);
       if (rows.length === 0) continue;
       await db.table(name).bulkPut(rows);
       total += rows.length;
+    }
+    if (mode === 'merge') {
+      const fileIds = new Set(
+        [...backup.data.transactions, ...backup.data.budgets].map((row) => String((row as Rec).id)),
+      );
+      await unifyEquivalentRecords(fileIds);
     }
   });
   await ensureInitialized();
@@ -401,6 +600,18 @@ export function csvField(value: string): string {
   return value;
 }
 
+/** Início que as planilhas interpretam como fórmula (=, +, -, @) ou que o Excel descarta (tabulação, CR). */
+const FORMULA_START = /^[=+\-@\t\r]/;
+
+/**
+ * Campo de TEXTO livre (descrição, nomes, tags, observações): neutraliza fórmulas prefixando um apóstrofo — Excel e
+ * LibreOffice avaliam '=...', '+...', '-...' e '@...' mesmo entre aspas (ex.: '- ajuste' viraria #NOME?) — e então
+ * escapa como csvField. Não use em colunas numéricas (Valor).
+ */
+export function csvText(value: string): string {
+  return csvField(FORMULA_START.test(value) ? `'${value}` : value);
+}
+
 /** Centavos em decimal brasileiro sem separador de milhar: -123456 => '-1234,56'. */
 export function csvDecimal(cents: Cents): string {
   const abs = Math.abs(Math.trunc(cents));
@@ -413,6 +624,7 @@ export function csvDecimal(cents: Cents): string {
  * Converte lançamentos em CSV para planilhas brasileiras (Excel/LibreOffice/Google Planilhas):
  * separador ';', vírgula decimal, datas DD/MM/AAAA, cabeçalho em pt-BR, BOM UTF-8 e quebras de linha CRLF.
  * Valor com sinal: despesas negativas, receitas positivas, transferências positivas (a coluna Tipo identifica).
+ * Parcela como '2 de 10'; textos que começam com =, +, - ou @ recebem um apóstrofo (não viram fórmula).
  * Ordenado por data (mais antigo primeiro), depois descrição.
  */
 export function transactionsToCSV(transactions: Transaction[], categories: Category[], accounts: Account[]): string {
@@ -432,19 +644,20 @@ export function transactionsToCSV(transactions: Transaction[], categories: Categ
         : (categoryName.get(tx.categoryId) ?? 'Sem categoria');
     const signed = tx.type === 'despesa' ? -tx.amount : tx.amount;
     const cells = [
-      formatDateBR(tx.date),
-      tx.description,
-      CSV_TYPE_LABELS[tx.type] ?? tx.type,
-      category,
-      accountName.get(tx.accountId) ?? '(conta removida)',
-      tx.toAccountId ? (accountName.get(tx.toAccountId) ?? '(conta removida)') : '',
-      csvDecimal(signed),
-      tx.status === 'pago' ? 'Pago' : 'Pendente',
-      tx.installment ? `${tx.installment.number}/${tx.installment.total}` : '',
-      tx.tags.join(', '),
-      tx.notes,
+      csvField(formatDateBR(tx.date)),
+      csvText(tx.description),
+      csvField(CSV_TYPE_LABELS[tx.type] ?? tx.type),
+      csvText(category),
+      csvText(accountName.get(tx.accountId) ?? '(conta removida)'),
+      csvText(tx.toAccountId ? (accountName.get(tx.toAccountId) ?? '(conta removida)') : ''),
+      csvField(csvDecimal(signed)),
+      csvField(tx.status === 'pago' ? 'Pago' : 'Pendente'),
+      // '1 de 12' (e não '1/12', que o Excel em pt-BR converte na data 01/dez).
+      csvField(tx.installment ? `${tx.installment.number} de ${tx.installment.total}` : ''),
+      csvText(tx.tags.join(', ')),
+      csvText(tx.notes),
     ];
-    lines.push(cells.map(csvField).join(CSV_SEPARATOR));
+    lines.push(cells.join(CSV_SEPARATOR));
   }
   return BOM + lines.join(CSV_NEWLINE) + CSV_NEWLINE;
 }

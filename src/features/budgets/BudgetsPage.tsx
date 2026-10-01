@@ -1,6 +1,6 @@
 import { CalendarClock, Copy, PiggyBank, Plus, Sparkles } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
-import { budgetOverview, suggestBudgets, type BudgetStatus } from '@/analytics';
+import { budgetOverview, MIN_PACE_DAYS, suggestBudgets, type BudgetStatus } from '@/analytics';
 import {
   Button,
   Card,
@@ -16,7 +16,7 @@ import {
 } from '@/components/ui';
 import { useFinanceData, useToday } from '@/db/hooks';
 import { copyBudgets, deleteBudget } from '@/db/repo';
-import { formatMonthLong, monthKey } from '@/domain/dates';
+import { formatMonthLong, monthKey, parseISO } from '@/domain/dates';
 import { formatPercent } from '@/domain/money';
 import { plural } from '@/domain/text';
 import type { ID, MonthKey } from '@/domain/types';
@@ -72,6 +72,8 @@ export default function BudgetsPage() {
   const prev = previousMonth(month);
   const prevSpecific = specificBudgetCount(data.budgets, prev);
   const isCurrentMonth = month === monthKey(today);
+  // Nos primeiros dias do mês ainda não dá para medir o ritmo: as projeções por categoria ficam ocultas.
+  const tooEarlyToProject = isCurrentMonth && parseISO(today).day < MIN_PACE_DAYS;
   const hasBudgets = overview.items.length > 0;
 
   async function copyFromPrevious() {
@@ -154,7 +156,7 @@ export default function BudgetsPage() {
 
       {actions}
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           {hasBudgets ? (
             <>
@@ -230,6 +232,12 @@ export default function BudgetsPage() {
                   title="Categorias"
                   subtitle={`${plural(overview.items.length, 'orçamento', 'orçamentos')} em ${monthLabel}`}
                 />
+                {tooEarlyToProject && (
+                  <p className="-mt-2 mb-4 text-xs text-slate-500 dark:text-slate-400">
+                    A projeção para o fim do mês aparece a partir do dia {MIN_PACE_DAYS}: antes disso, ainda há poucos
+                    dias para medir o ritmo dos seus gastos.
+                  </p>
+                )}
                 <ul className="divide-y divide-slate-200 dark:divide-slate-800" aria-label="Orçamentos por categoria">
                   {overview.items.map((item) => (
                     <BudgetRow

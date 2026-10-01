@@ -1,15 +1,21 @@
 import { PartyPopper } from 'lucide-react';
 import { useId, useState, type FormEvent } from 'react';
 import { Button, Field, Input, Modal, Money, MoneyInput, Select, useToast } from '@/components/ui';
+import { debtPayoffAmount } from '@/analytics';
 import { addDebtPayment } from '@/db/repo';
 import { formatDateBR } from '@/domain/dates';
-import type { Account, Cents, Debt, ID, ISODate } from '@/domain/types';
+import type { Account, Cents, Debt, DebtPayment, ID, ISODate } from '@/domain/types';
 import { validatePayment } from './debt-utils';
 
 export interface PaymentModalProps {
   debt: Debt;
   /** Saldo devedor atual (já descontados os pagamentos). */
   currentBalance: Cents;
+  /**
+   * Pagamentos registrados (de todas as dívidas). Com eles, "Quitar tudo" e o aviso de quitação incluem os juros
+   * do mês da data escolhida (debtPayoffAmount); sem eles, usa-se `currentBalance`.
+   */
+  payments?: DebtPayment[];
   accounts: Account[];
   today: ISODate;
   onClose: () => void;
@@ -18,7 +24,15 @@ export interface PaymentModalProps {
 }
 
 /** Registrar pagamento de uma dívida, com débito opcional em uma conta (cria uma despesa). */
-export function PaymentModal({ debt, currentBalance, accounts, today, onClose, onDone }: PaymentModalProps) {
+export function PaymentModal({
+  debt,
+  currentBalance,
+  payments,
+  accounts,
+  today,
+  onClose,
+  onDone,
+}: PaymentModalProps) {
   const toast = useToast();
   const ids = { form: useId(), amount: useId(), date: useId(), note: useId(), account: useId() };
   const [amount, setAmount] = useState<Cents | null>(null);
@@ -32,12 +46,15 @@ export function PaymentModal({ debt, currentBalance, accounts, today, onClose, o
   const sources = accounts.filter((a) => !a.archived && a.type !== 'cartao_credito');
   const selected = sources.find((a) => a.id === fromAccountId);
   const beforeSnapshot = !!date && date < debt.balanceDate;
-  const paysOff = !beforeSnapshot && amount !== null && amount > 0 && amount >= currentBalance;
+  // Valor que zera a dívida na data escolhida (com os juros do mês, se ela vier depois do último pagamento).
+  const payoff =
+    payments && !beforeSnapshot ? debtPayoffAmount(debt, payments, date || today) : currentBalance;
+  const paysOff = !beforeSnapshot && amount !== null && amount > 0 && amount >= payoff;
 
   const shortcuts: { label: string; value: Cents }[] = [];
-  if (debt.minimumPayment > 0 && debt.minimumPayment < currentBalance)
+  if (debt.minimumPayment > 0 && debt.minimumPayment < payoff)
     shortcuts.push({ label: 'Parcela mínima', value: debt.minimumPayment });
-  if (currentBalance > 0) shortcuts.push({ label: 'Quitar tudo', value: currentBalance });
+  if (payoff > 0) shortcuts.push({ label: 'Quitar tudo', value: payoff });
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();

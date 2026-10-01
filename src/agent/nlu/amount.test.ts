@@ -97,3 +97,32 @@ describe('findInstallments', () => {
     expect(findInstallments(fold(text))).toBeNull();
   });
 });
+
+describe('extractAmount — regressões', () => {
+  it('centavos por extenso somam ao valor e entram no trecho', () => {
+    expect(extractAmount('45 reais e 90 centavos')).toEqual({ amount: 4590, match: '45 reais e 90 centavos' });
+    expect(extractAmount('R$ 50 com 30 centavos')).toEqual({ amount: 5030, match: 'R$ 50 com 30 centavos' });
+  });
+
+  it('ordinais (13º, 1ª) não são dinheiro', () => {
+    expect(extractAmount('13º salário de 4800')?.amount).toBe(480000);
+    expect(extractAmount('1ª parcela de 250')?.amount).toBe(25000);
+  });
+
+  it('quantidade antes do preço: o preço é o valor', () => {
+    expect(extractAmount('2 pizzas de 40')).toEqual({ amount: 4000, match: '40' });
+    expect(extractAmount('3 cervejas por 15')?.amount).toBe(1500);
+  });
+
+  it('não arredonda valores com 3 casas decimais (1,234 não vira R$ 1,23)', () => {
+    expect(extractAmount('gastei 1,234 na farmácia')?.amount).not.toBe(123);
+    expect(extractAmount('gastei 12.345,678 no carro')?.amount).not.toBe(1234568);
+  });
+
+  it('milhar separado por espaço depois de R$', () => {
+    expect(extractAmount('gastei R$ 1 234,56')).toEqual({ amount: 123456, match: 'R$ 1 234,56' });
+    expect(extractAmount('recebi R$ 12 500 de bônus')?.amount).toBe(1250000);
+    // Sem o símbolo, números separados continuam separados (quantidade + preço).
+    expect(extractAmount('2 300 reais')?.amount).not.toBe(230000);
+  });
+});

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { makeAccount, makeTransaction } from '@/test/factories';
-import { accountBalance, accountBalances, liquidBalance, totalBalance, transactionEffect } from './balances';
+import {
+  accountBalance,
+  accountBalances,
+  cardCommitted,
+  liquidBalance,
+  totalBalance,
+  transactionEffect,
+} from './balances';
 
 const checking = makeAccount({ id: 'chk', type: 'corrente', initialBalance: 100000 });
 const savings = makeAccount({ id: 'sav', type: 'poupanca', initialBalance: 50000 });
@@ -160,5 +167,26 @@ describe('totalBalance e liquidBalance', () => {
     expect(totalBalance([], transactions)).toBe(0);
     expect(totalBalance([archived], transactions)).toBe(0);
     expect(liquidBalance([card, invest], transactions)).toBe(0);
+  });
+});
+
+describe('cardCommitted', () => {
+  const card = makeAccount({ id: 'card', type: 'cartao_credito', creditLimit: 800000 });
+  it('fatura em aberto + débitos futuros; pagamento agendado não abate o limite', () => {
+    const txs = [
+      makeTransaction({ accountId: 'card', amount: 390796, date: '2026-09-20' }),
+      makeTransaction({ accountId: 'card', amount: 35990, date: '2026-11-12', status: 'pendente' }),
+      makeTransaction({ accountId: 'card', amount: 19990, date: '2026-10-12', status: 'pendente' }),
+      makeTransaction({ accountId: 'cc', type: 'transferencia', toAccountId: 'card', amount: 390796, date: '2026-10-10', status: 'pendente' }),
+    ];
+    expect(cardCommitted(card, txs, '2026-10-01')).toBe(390796 + 35990 + 19990);
+    // Depois que o pagamento acontece (pago), o limite volta.
+    const paid = txs.map((t) => (t.type === 'transferencia' ? { ...t, status: 'pago' as const, date: '2026-10-01' } : t));
+    expect(cardCommitted(card, paid, '2026-10-01')).toBe(35990 + 19990);
+  });
+
+  it('cartão com crédito (saldo positivo) não fica com uso negativo', () => {
+    const txs = [makeTransaction({ accountId: 'cc', type: 'transferencia', toAccountId: 'card', amount: 10000, date: '2026-09-01' })];
+    expect(cardCommitted(card, txs, '2026-10-01')).toBe(0);
   });
 });

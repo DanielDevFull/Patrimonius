@@ -3,6 +3,7 @@
  */
 import { categoryBreakdown, type GroupBreakdown, type MonthSummary } from '@/analytics';
 import { endOfMonth, lastMonths, startOfMonth } from '@/domain/dates';
+import { RULE_50_30_20 } from '@/domain/defaults';
 import { safeRatio } from '@/domain/money';
 import type { BudgetGroup, Category, CategoryKind, Cents, ID, ISODate, MonthKey, Transaction } from '@/domain/types';
 
@@ -172,15 +173,13 @@ export interface RuleRow {
   status: RuleStatus;
 }
 
-export const RULE_TARGETS: Record<BudgetGroup, number> = { necessidades: 0.5, desejos: 0.3, objetivos: 0.2 };
-
 export function ruleRows(b: GroupBreakdown): RuleRow[] {
   const groups: BudgetGroup[] = ['necessidades', 'desejos', 'objetivos'];
   return groups.map((group) => {
     const actual = b[group];
     const ideal = b.ideal[group];
     const share = b.shares[group];
-    const idealShare = RULE_TARGETS[group];
+    const idealShare = RULE_50_30_20[group];
     const status: RuleStatus =
       group === 'objetivos' ? (actual >= ideal ? 'ok' : 'abaixo') : actual <= ideal ? 'ok' : 'acima';
     return { group, actual, ideal, share, idealShare, diff: actual - ideal, status };

@@ -123,6 +123,8 @@ describe('format — números', () => {
     expect(monthlyEquivalent(10000, 'semanal')).toBe(43333);
     expect(monthlyEquivalent(9000, 'trimestral')).toBe(3000);
     expect(monthlyEquivalent(5590, 'mensal')).toBe(5590);
+    // Quinzenal = duas vezes por mês (antes: 26/12 => R$ 3.250,00 para R$ 1.500,00).
+    expect(monthlyEquivalent(150000, 'quinzenal')).toBe(300000);
   });
 
   it('mediana e variação relativa', () => {

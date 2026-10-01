@@ -17,11 +17,17 @@ import {
   useToast,
 } from '@/components/ui';
 import { useFinanceData, useToday } from '@/db/hooks';
-import { deleteTransaction, setTransactionStatus } from '@/db/repo';
+import {
+  deleteDebtPayment,
+  deleteGoalContribution,
+  deleteTransaction,
+  setTransactionStatus,
+} from '@/db/repo';
 import { formatMonthLong, monthKey } from '@/domain/dates';
 import { plural } from '@/domain/text';
 import type { Account, Category, ISODate, MonthKey, Transaction, TransactionType } from '@/domain/types';
 import { DeleteInstallmentModal, type DeleteScope } from './DeleteInstallmentModal';
+import { DeleteLinkedTransactionModal } from './DeleteLinkedTransactionModal';
 import {
   activeFilterCount,
   buildLookups,
@@ -34,7 +40,12 @@ import {
   type Lookups,
   type TransactionFilters,
 } from './filters';
-import { stripInstallmentSuffix } from './form-utils';
+import {
+  installmentCounts,
+  stripInstallmentSuffix,
+  transactionLinks,
+  type TransactionLink,
+} from './form-utils';
 import { TransactionFormModal, type TransactionFormInitial } from './TransactionForm';
 import { TransactionRow } from './TransactionRow';
 
@@ -69,6 +80,9 @@ export default function TransactionsPage() {
   const [form, setForm] = useState<FormState | null>(null);
   const [formSeq, setFormSeq] = useState(0);
   const [deleting, setDeleting] = useState<Transaction | null>(null);
+  const [deletingLinked, setDeletingLinked] = useState<{ tx: Transaction; link: TransactionLink } | null>(
+    null,
+  );
 
   // ?novo=despesa|receita|transferencia abre o formulário (o parâmetro é removido em seguida).
   const [searchParams, setSearchParams] = useSearchParams();
@@ -109,6 +123,7 @@ export default function TransactionsPage() {
     [monthItems, month, filters, lookups],
   );
   const pendingCount = useMemo(() => monthItems.filter((t) => t.status === 'pendente').length, [monthItems]);
+  const links = useMemo(() => (data ? transactionLinks(data) : new Map<string, TransactionLink>()), [data]);
 
   const handlers = useMemo<Handlers>(
     () => ({
@@ -146,6 +161,11 @@ export default function TransactionsPage() {
           setDeleting(tx);
           return;
         }
+        const link = links.get(tx.id);
+        if (link) {
+          setDeletingLinked({ tx, link });
+          return;
+        }
         void (async () => {
           const ok = await confirm({
             title: 'Excluir lançamento?',
@@ -165,20 +185,40 @@ export default function TransactionsPage() {
         })();
       },
     }),
-    [confirm, openForm, toast],
+    [confirm, openForm, toast, links],
   );
+
+  async function confirmLinkedDelete(alsoLinked: boolean) {
+    const target = deletingLinked;
+    setDeletingLinked(null);
+    if (!target) return;
+    const { tx, link } = target;
+    try {
+      if (!alsoLinked) {
+        await deleteTransaction(tx.id);
+        toast('Lançamento excluído.');
+      } else if (link.kind === 'debtPayment') {
+        await deleteDebtPayment(link.id, true);
+        toast('Lançamento e pagamento da dívida excluídos.');
+      } else {
+        await deleteGoalContribution(link.id, true);
+        toast(
+          link.amount >= 0
+            ? 'Lançamento e aporte da meta excluídos.'
+            : 'Lançamento e resgate da meta excluídos.',
+        );
+      }
+    } catch {
+      toast('Não foi possível excluir o lançamento.', 'error');
+    }
+  }
 
   async function confirmInstallmentDelete(scope: DeleteScope) {
     const tx = deleting;
     setDeleting(null);
     if (!tx?.installment || !data) return;
-    const siblings = data.transactions.filter((t) => t.installment?.groupId === tx.installment!.groupId);
-    const count =
-      scope === 'one'
-        ? 1
-        : scope === 'group'
-          ? siblings.length
-          : siblings.filter((t) => t.installment!.number >= tx.installment!.number).length;
+    const counts = installmentCounts(data.transactions, tx);
+    const count = scope === 'one' ? 1 : scope === 'group' ? counts.group : counts.future;
     try {
       await deleteTransaction(tx.id, scope);
       toast(count === 1 ? 'Parcela excluída.' : `${count} parcelas excluídas.`);
@@ -189,6 +229,7 @@ export default function TransactionsPage() {
 
   if (!data || !lookups || !summary) return <Spinner />;
 
+  const deletingCounts = deleting ? installmentCounts(data.transactions, deleting) : { group: 0, future: 0 };
   const filterCount = activeFilterCount(filters);
   const totals = filteredTotals(filtered);
   const hasAny = data.transactions.length > 0;
@@ -363,8 +404,15 @@ export default function TransactionsPage() {
       />
       <DeleteInstallmentModal
         transaction={deleting}
+        groupCount={deletingCounts.group}
+        futureCount={deletingCounts.future}
         onClose={() => setDeleting(null)}
         onConfirm={(scope) => void confirmInstallmentDelete(scope)}
+      />
+      <DeleteLinkedTransactionModal
+        target={deletingLinked}
+        onClose={() => setDeletingLinked(null)}
+        onConfirm={(alsoLinked) => void confirmLinkedDelete(alsoLinked)}
       />
     </div>
   );
@@ -410,7 +458,8 @@ function FiltersBar({ accounts, categories, filters, setFilter }: FiltersBarProp
           onChange={(e) => setFilter('query', e.target.value)}
         />
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+      {/* Uma coluna no celular: em 2 colunas os textos dos filtros ficam cortados ("Todas as si…"). */}
+      <div className="mt-3 grid grid-cols-1 gap-2 min-[460px]:grid-cols-2 lg:grid-cols-4">
         <Select
           aria-label="Filtrar por tipo"
           value={filters.type}

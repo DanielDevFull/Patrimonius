@@ -1,6 +1,6 @@
 import { ChartColumn, Table2 } from 'lucide-react';
 import { useMemo } from 'react';
-import { monthlySeries } from '@/analytics';
+import { monthlySeries, savingsTargetPct } from '@/analytics';
 import { Card, CardHeader, cn, Money, StatCard } from '@/components/ui';
 import { formatMonthShort } from '@/domain/dates';
 import { formatPercent } from '@/domain/money';
@@ -13,14 +13,15 @@ export interface CashflowTabProps {
   months: MonthKey[];
 }
 
-function RateCell({ rate, target }: { rate: number | null; target: number }) {
+/** `target`: meta de poupança como fração da renda (null = o usuário não definiu meta). */
+function RateCell({ rate, target }: { rate: number | null; target: number | null }) {
   if (rate === null) return <span className="text-slate-400">—</span>;
   return (
     <span
       className={cn(
         rate < 0
           ? 'text-rose-600 dark:text-rose-400'
-          : rate >= target
+          : target !== null && rate >= target
             ? 'text-emerald-700 dark:text-emerald-400'
             : 'text-slate-700 dark:text-slate-200',
       )}
@@ -39,11 +40,13 @@ export function CashflowTab({ data, months }: CashflowTabProps) {
   );
   const rows = useMemo(() => cashflowRows(series), [series]);
   const totals = useMemo(() => cashflowTotals(series), [series]);
-  const target = (data.settings.savingsRateTarget > 0 ? data.settings.savingsRateTarget : 20) / 100;
+  const targetPct = savingsTargetPct(data.settings);
+  const target = targetPct === null ? null : targetPct / 100;
+  const rate = totals.savingsRate;
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Receitas no período" value={<Money value={totals.income} />} tone="positive" />
         <StatCard label="Despesas no período" value={<Money value={totals.expense} />} tone="negative" />
         <StatCard
@@ -58,9 +61,17 @@ export function CashflowTab({ data, months }: CashflowTabProps) {
         />
         <StatCard
           label="Taxa de poupança"
-          value={totals.savingsRate === null ? '—' : formatPercent(totals.savingsRate)}
-          hint={`Meta: ${formatPercent(target)} da renda`}
-          tone={totals.savingsRate !== null && totals.savingsRate >= target ? 'positive' : 'warning'}
+          value={rate === null ? '—' : formatPercent(rate)}
+          hint={target === null ? 'Sem meta de poupança definida' : `Meta: ${formatPercent(target)} da renda`}
+          tone={
+            target === null
+              ? rate !== null && rate < 0
+                ? 'warning'
+                : 'neutral'
+              : rate !== null && rate >= target
+                ? 'positive'
+                : 'warning'
+          }
         />
       </div>
 
@@ -84,7 +95,7 @@ export function CashflowTab({ data, months }: CashflowTabProps) {
             title={<span id="cashflow-table-title">Mês a mês</span>}
             subtitle="Taxa de poupança = (resultado + investimentos) ÷ receitas"
           />
-          <div className="-mx-4 overflow-x-auto px-4 sm:-mx-5 sm:px-5">
+          <div className="relative -mx-4 overflow-x-auto px-4 sm:-mx-5 sm:px-5">
             <table className="w-full min-w-max text-sm">
               <caption className="sr-only">Fluxo de caixa mensal</caption>
               <thead>

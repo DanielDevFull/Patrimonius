@@ -1,5 +1,6 @@
 import { Fragment, useMemo, type ReactNode } from 'react';
 import { cn } from '@/components/ui';
+import { splitUserMoneyText } from './chat-utils';
 import { parseInline, parseMiniMarkdown, type InlineNode } from './mini-markdown';
 
 function renderInline(nodes: InlineNode[], keyPrefix = ''): ReactNode[] {
@@ -27,6 +28,27 @@ function renderInline(nodes: InlineNode[], keyPrefix = ''): ReactNode[] {
 export function InlineText({ text }: { text: string }) {
   const nodes = useMemo(() => parseInline(text), [text]);
   return <>{renderInline(nodes)}</>;
+}
+
+/**
+ * Texto livre (mensagem digitada pelo usuário, sugestão de pergunta) sem markdown, com os valores marcados com
+ * `.money` — '1.250', '6 mil', 'R$ 50' — para o modo "ocultar valores" borrá-los como nas respostas do agente.
+ */
+export function UserText({ text }: { text: string }) {
+  const parts = useMemo(() => splitUserMoneyText(text), [text]);
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.money ? (
+          <span key={i} className="money tabular">
+            {part.text}
+          </span>
+        ) : (
+          <Fragment key={i}>{part.text}</Fragment>
+        ),
+      )}
+    </>
+  );
 }
 
 /**

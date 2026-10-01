@@ -1,7 +1,8 @@
 /** Metas: criação, situação e aportes. */
 import {
-  averageMonthlyExpense,
   averageMonthlyIncome,
+  averageMonthlySurplus,
+  expenseTrackingStart,
   goalProgress,
   goalsOverview,
   type GoalProgress,
@@ -12,7 +13,7 @@ import { addMonths, diffMonths, formatDateBR, formatMonthLong, monthKey } from '
 import { COLOR_PALETTE } from '@/domain/defaults';
 import { formatBRL, formatDecimal, formatPercent } from '@/domain/money';
 import { normalizeText, plural } from '@/domain/text';
-import type { FinanceData, Priority } from '@/domain/types';
+import type { FinanceData, Goal, Priority } from '@/domain/types';
 import { bullets, categoryLabel, dateRelative, money, sentences } from '../format';
 import type { AgentCard, CardTone, GoalDraft } from '../types';
 import type { Handler, TurnContext } from './context';
@@ -62,15 +63,39 @@ export function nextGoalColor(data: FinanceData): string {
   return COLOR_PALETTE[data.goals.length % COLOR_PALETTE.length];
 }
 
-/** Sobra mensal média (renda - despesa dos 3 meses anteriores) e renda média (com fallback na estimativa). */
+/**
+ * Sobra mensal média dos 3 meses anteriores (averageMonthlySurplus: aportes em Investimentos e reserva não contam
+ * como gasto) e renda média (com fallback na estimativa).
+ */
 function monthlyCapacity(ctx: TurnContext): { income: number; surplus: number | null } {
   const { data, month } = ctx;
   const recordedIncome = averageMonthlyIncome(data.transactions, month, 3);
-  const expense = averageMonthlyExpense(data.transactions, month, 3);
   const estimate = data.settings.monthlyIncomeEstimate ?? 0;
   const income = recordedIncome > 0 ? recordedIncome : estimate;
-  const hasHistory = recordedIncome > 0 || expense > 0;
-  return { income, surplus: hasHistory ? recordedIncome - expense : null };
+  // Sem receitas registradas nos meses anteriores, a "sobra" seria só -despesas: não afirma nada sobre ela.
+  return {
+    income,
+    surplus: recordedIncome > 0 ? averageMonthlySurplus(data.transactions, month, 3, expenseTrackingStart(data)) : null,
+  };
+}
+
+/** Meta não concluída com o mesmo nome (normalizado) — para não criar uma "Viagem" duplicada. */
+function sameNameGoal(data: FinanceData, name: string): Goal | undefined {
+  const key = normalizeText(name);
+  return data.goals.find((g) => g.status !== 'concluida' && normalizeText(g.name) === key);
+}
+
+/** Primeiro nome livre: "Viagem 2", "Viagem 3"... */
+function freeGoalName(data: FinanceData, name: string): string {
+  const taken = new Set(data.goals.map((g) => normalizeText(g.name)));
+  let n = 2;
+  while (taken.has(normalizeText(`${name} ${n}`))) n++;
+  return `${name} ${n}`;
+}
+
+function existingGoalSentence(ctx: TurnContext, goal: Goal): string {
+  const p = goalProgress(goal, ctx.data.goalContributions, ctx.today);
+  return `Você já tem a meta ${categoryLabel({ icon: goal.icon, name: `“${goal.name}”` })}: ${formatBRL(p.saved)} de ${formatBRL(goal.targetAmount)} (${formatPercent(p.percent)}).`;
 }
 
 function progressCardItem(p: GoalProgress, current = p.saved) {
@@ -94,20 +119,43 @@ export const createGoalReply: Handler = (ctx) => {
       suggestions: ['Criar meta viagem de 10 mil em 12 meses', 'Criar meta reserva de emergência de 15 mil em 18 meses'],
     };
   }
+  const duplicate = name ? sameNameGoal(data, name) : undefined;
   if (amount === undefined || amount <= 0) {
+    // O próximo valor ("10 mil", "10 mil em 12 meses") completa esta meta (ver resolveTurn).
+    const pendingName = duplicate && name ? freeGoalName(data, name) : (name as string);
+    const memory = {
+      lastEntities: { name: pendingName, months: e.months, targetDate: e.targetDate },
+      awaitingAmount: true,
+    };
+    if (duplicate) {
+      return {
+        text: sentences([
+          existingGoalSentence(ctx, duplicate),
+          `Quer guardar dinheiro nela? Se for outro objetivo, me diga quanto quer juntar que eu crio a meta “${pendingName}”.`,
+        ]),
+        suggestions: [`Guardei 100 na meta ${duplicate.name}`, 'Como estão minhas metas?'],
+        memory,
+      };
+    }
     return {
       text: `Boa ideia, a meta “${name}”! Quanto você quer juntar? Se tiver um prazo, me diga também (ex.: “em 12 meses”).`,
       suggestions: [`Criar meta ${name} de 5 mil em 12 meses`, `Criar meta ${name} de 10 mil em 24 meses`],
+      memory,
     };
   }
-  const finalName = name ?? 'Nova meta';
+  // Já existe uma meta com esse nome: avisa e propõe um nome diferente ("Viagem 2").
+  const finalName = duplicate && name ? freeGoalName(data, name) : (name ?? 'Nova meta');
   const icon = goalIcon(finalName);
   const targetDate = e.targetDate ?? (e.months && e.months > 0 ? addMonths(ctx.today, e.months) : null);
-  const months = targetDate ? Math.max(1, diffMonths(ctx.month, monthKey(targetDate))) : null;
+  // Mesma convenção de goalProgress: meta nova ainda sem aporte => o mês atual também conta como mês de aporte.
+  const months = targetDate ? Math.max(1, diffMonths(ctx.month, monthKey(targetDate)) + 1) : null;
   const monthly = months ? Math.ceil(amount / months) : null;
   const { income, surplus } = monthlyCapacity(ctx);
   const parts: (string | null)[] = [
-    `Ótimo objetivo${userName ? `, ${userName}` : ''}! Meta ${icon} “${finalName}”: ${money(amount)}${targetDate ? ` até ${formatDateBR(targetDate)}` : ''}.`,
+    duplicate ? existingGoalSentence(ctx, duplicate) : null,
+    duplicate
+      ? `Se é um objetivo diferente, a nova meta fica como ${icon} “${finalName}”: ${money(amount)}${targetDate ? ` até ${formatDateBR(targetDate)}` : ''} — dá para mudar o nome antes de confirmar. Se quiser reforçar a que já existe, é só guardar nela.`
+      : `Ótimo objetivo${userName ? `, ${userName}` : ''}! Meta ${icon} “${finalName}”: ${money(amount)}${targetDate ? ` até ${formatDateBR(targetDate)}` : ''}.`,
     name ? null : 'Dei o nome “Nova meta” — você pode mudar antes de confirmar.',
   ];
   if (monthly !== null && months !== null) {
@@ -151,8 +199,10 @@ export const createGoalReply: Handler = (ctx) => {
   return {
     text: sentences(parts),
     cards,
-    actions: [{ type: 'create_goal', label: 'Criar meta', draft }],
-    suggestions: ['Como estão minhas metas?', 'Vou fechar o mês no azul?', 'Dicas para economizar'],
+    actions: [{ type: 'create_goal', label: duplicate ? `Criar meta “${finalName}”` : 'Criar meta', draft }],
+    suggestions: duplicate
+      ? [`Guardei ${formatDecimal(monthly ?? 10000)} na meta ${duplicate.name}`, 'Como estão minhas metas?']
+      : ['Como estão minhas metas?', 'Vou fechar o mês no azul?', 'Dicas para economizar'],
   };
 };
 
@@ -256,6 +306,8 @@ export const contributeGoalReply: Handler = (ctx) => {
       suggestions: [
         `Guardei ${formatDecimal(progress.requiredMonthly && progress.requiredMonthly > 0 ? progress.requiredMonthly : 10000)} na meta ${goal.name}`,
       ],
+      // O próximo valor ("300") completa este aporte.
+      memory: { lastEntities: { goalId: goal.id, accountId: e.accountId, date: e.date }, awaitingAmount: true },
     };
   }
   const date = e.date ?? today;

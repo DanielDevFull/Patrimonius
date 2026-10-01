@@ -2,13 +2,13 @@
  * Regras puras da tela de recorrências: equivalente mensal, próxima data, edição de agenda e validação.
  */
 import { nextOccurrence } from '@/analytics/recurring';
-import { isISODate, monthKey, parseISO, startOfMonth } from '@/domain/dates';
+import { isISODate, isPlausibleDate, monthKey, parseISO, startOfMonth } from '@/domain/dates';
 import type { Cents, Frequency, ID, ISODate, RecurringRule, Transaction } from '@/domain/types';
 
 /** Quantas ocorrências por mês, em média, cada frequência tem. */
 export const MONTHLY_FACTOR: Record<Frequency, number> = {
   semanal: 52 / 12,
-  quinzenal: 26 / 12,
+  quinzenal: 2, // duas vezes por mês (ver nextOccurrence)
   mensal: 1,
   bimestral: 1 / 2,
   trimestral: 1 / 3,
@@ -95,20 +95,45 @@ export function pendingByRule(transactions: Transaction[]): Map<ID, Transaction[
 
 const SAFETY = 2000;
 
+/** Frequências com no máximo uma ocorrência por mês (comparadas por mês ao reagendar). */
+function isMonthlyOrLonger(frequency: Frequency): boolean {
+  return frequency !== 'semanal' && frequency !== 'quinzenal';
+}
+
 /**
  * Próxima data a materializar depois de uma mudança de agenda (início/frequência):
  * a primeira ocorrência da nova agenda posterior ao último lançamento já gerado (ou o próprio início, se nada foi gerado).
+ * Em frequências mensais ou maiores a comparação é por MÊS: se já existe lançamento no mês (ex.: a conta de outubro
+ * já paga no dia 10 e o vencimento mudou para o dia 15), a nova agenda começa no período seguinte, sem repetir o mês.
  */
 export function recomputeNextDate(
   startDate: ISODate,
   frequency: Frequency,
   lastGenerated: ISODate | null,
 ): ISODate {
-  if (lastGenerated === null || lastGenerated < startDate) return startDate;
+  if (lastGenerated === null) return startDate;
+  const lastMonth = monthKey(lastGenerated);
+  const covered = isMonthlyOrLonger(frequency)
+    ? (date: ISODate) => monthKey(date) <= lastMonth
+    : (date: ISODate) => date <= lastGenerated;
   const anchor = parseISO(startDate).day;
   let date = startDate;
-  for (let i = 0; i < SAFETY && date <= lastGenerated; i++) date = nextOccurrence(date, frequency, anchor);
+  for (let i = 0; i < SAFETY && covered(date); i++) date = nextOccurrence(date, frequency, anchor);
   return date;
+}
+
+/**
+ * nextDate ao reagendar uma regra que já gerou lançamentos: recomputeNextDate a partir do último lançamento que
+ * sobrou (os pendentes do mês corrente em diante são removidos antes) e sem gerar ocorrências de meses passados.
+ */
+export function rescheduleNextDate(
+  startDate: ISODate,
+  frequency: Frequency,
+  lastRemaining: ISODate | null,
+  today: ISODate,
+): ISODate {
+  const next = recomputeNextDate(startDate, frequency, lastRemaining);
+  return skipToCurrentMonth(next, frequency, parseISO(startDate).day, today);
 }
 
 /**
@@ -125,6 +150,29 @@ export function skipToCurrentMonth(
   let next = date;
   for (let i = 0; i < SAFETY && next < monthStart; i++) next = nextOccurrence(next, frequency, anchorDay);
   return next;
+}
+
+/**
+ * Ocorrências de uma regra NOVA anteriores ao mês corrente: de `startDate` até o fim do mês passado, respeitando
+ * `endDate`. Ao cadastrar uma recorrência que começou no passado (ex.: aluguel desde janeiro), gerá-las cria
+ * pendentes vencidos que em geral já foram pagos ou lançados — por isso o formulário só as gera se o usuário pedir.
+ */
+export function pastOccurrences(
+  startDate: string,
+  frequency: Frequency,
+  endDate: ISODate | null,
+  today: ISODate,
+): ISODate[] {
+  if (!isISODate(startDate)) return [];
+  const monthStart = startOfMonth(monthKey(today));
+  const anchor = parseISO(startDate).day;
+  const dates: ISODate[] = [];
+  let date = startDate;
+  while (dates.length < SAFETY && date < monthStart && (endDate === null || date <= endDate)) {
+    dates.push(date);
+    date = nextOccurrence(date, frequency, anchor);
+  }
+  return dates;
 }
 
 /**
@@ -145,6 +193,8 @@ export interface RecurringFormCheck {
   accountId: ID | null;
   startDate: string;
   endDate: string;
+  /** Hoje: as datas precisam ser plausíveis (ano de 1900 até o ano corrente + 10). */
+  today: ISODate;
 }
 
 export function validateRecurringForm(v: RecurringFormCheck): Partial<Record<RecurringFormField, string>> {
@@ -154,10 +204,12 @@ export function validateRecurringForm(v: RecurringFormCheck): Partial<Record<Rec
   if (!v.categoryId) errors.categoryId = 'Escolha uma categoria.';
   if (!v.accountId) errors.accountId = 'Escolha uma conta.';
   if (!isISODate(v.startDate)) errors.startDate = 'Informe a data de início.';
+  else if (!isPlausibleDate(v.startDate, v.today)) errors.startDate = 'Confira o ano da data.';
   if (v.endDate) {
     if (!isISODate(v.endDate)) errors.endDate = 'Informe uma data válida ou deixe em branco.';
     else if (isISODate(v.startDate) && v.endDate < v.startDate)
       errors.endDate = 'O término deve ser depois do início.';
+    else if (!isPlausibleDate(v.endDate, v.today)) errors.endDate = 'Confira o ano da data.';
   }
   return errors;
 }

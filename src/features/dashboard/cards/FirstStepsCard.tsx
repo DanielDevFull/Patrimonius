@@ -32,7 +32,9 @@ export function FirstStepsCard({ steps, className }: { steps: FirstStep[]; class
               ) : (
                 <Circle size={22} className="shrink-0 text-slate-300 dark:text-slate-600" aria-hidden />
               )}
-              <div className="min-w-0 flex-1">
+              {/* basis-48 (12rem): no celular o botão desce para a linha de baixo em vez de espremer o texto
+                  palavra por palavra; em telas muito estreitas o texto ainda pode encolher (min-w-0). */}
+              <div className="min-w-0 grow basis-48">
                 <p
                   className={cn(
                     'text-sm font-semibold',
@@ -54,7 +56,7 @@ export function FirstStepsCard({ steps, className }: { steps: FirstStep[]; class
         </ol>
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl bg-brand-50 p-3 text-sm text-brand-900 dark:bg-brand-950/60 dark:text-brand-200">
           <Sparkles size={18} className="shrink-0" aria-hidden />
-          <p className="min-w-0 flex-1">
+          <p className="min-w-0 grow basis-48">
             Quer ver como fica antes de digitar seus dados? Carregue os <strong>dados de exemplo</strong> em
             Configurações (dá para apagar depois).
           </p>

@@ -18,7 +18,8 @@ const input = (p: Partial<PayoffDebtInput> & Pick<PayoffDebtInput, 'id'>): Payof
 });
 
 describe('debtCurrentBalance', () => {
-  const debt = makeDebt({ id: 'd1', balance: 500000, balanceDate: '2026-06-15' });
+  // Sem juros: o saldo é o informado menos os pagamentos (as regras de filtro ficam isoladas).
+  const debt = makeDebt({ id: 'd1', balance: 500000, balanceDate: '2026-06-15', interestRate: 0 });
 
   it('desconta só pagamentos da própria dívida a partir de balanceDate', () => {
     const payments = [
@@ -44,6 +45,41 @@ describe('debtCurrentBalance', () => {
     const payments = [makeDebtPayment({ debtId: 'd1', amount: 900000, date: '2026-07-01' })];
     expect(debtCurrentBalance(debt, payments)).toBe(0);
     expect(debtCurrentBalance({ ...debt, status: 'quitada' }, [])).toBe(0);
+  });
+
+  describe('com juros (amortização mês a mês)', () => {
+    // R$ 10.000,00 a 2% a.m., parcela de R$ 500,00 todo dia 10 a partir do mês seguinte ao saldo informado.
+    const loan = makeDebt({ id: 'L', balance: 1000000, balanceDate: '2026-01-05', interestRate: 2 });
+    const installments = (n: number) =>
+      Array.from({ length: n }, (_, i) =>
+        makeDebtPayment({
+          debtId: 'L',
+          amount: 50000,
+          date: `${2026 + Math.floor((i + 1) / 12)}-${String(((i + 1) % 12) + 1).padStart(2, '0')}-10`,
+        }),
+      );
+
+    it('soma os juros do mês antes de cada parcela (conferido com a fórmula de amortização)', () => {
+      // 10.000 × 1,02^10 − 500 × (1,02^10 − 1) / 0,02 = 6.715,08 (antes: 5.000,00, sem juros).
+      expect(debtCurrentBalance(loan, installments(10))).toBe(671508);
+      // Depois de 20 parcelas ainda faltam 2.710,80 (antes: 0 e a dívida aparecia quitada).
+      expect(debtCurrentBalance(loan, installments(20))).toBe(271080);
+      // São necessárias 26 parcelas para zerar.
+      expect(debtCurrentBalance(loan, installments(25))).toBeGreaterThan(0);
+      expect(debtCurrentBalance(loan, installments(26))).toBe(0);
+    });
+
+    it('acumula os meses sem pagamento e não cobra juros duas vezes no mesmo mês', () => {
+      const payments = [
+        makeDebtPayment({ debtId: 'L', amount: 100000, date: '2026-01-20' }), // mesmo mês do saldo: sem juros
+        makeDebtPayment({ debtId: 'L', amount: 100000, date: '2026-04-10' }), // 3 meses de juros sobre 900.000
+        makeDebtPayment({ debtId: 'L', amount: 50000, date: '2026-04-25' }), // mesmo mês: sem juros novos
+      ];
+      // 900.000 → 918.000 → 936.360 → 955.087 (juros arredondados ao centavo) − 100.000 − 50.000.
+      expect(debtCurrentBalance(loan, payments)).toBe(805087);
+      // asOf corta os pagamentos (e os juros vêm só com eles).
+      expect(debtCurrentBalance(loan, payments, '2026-03-31')).toBe(900000);
+    });
   });
 });
 
@@ -125,7 +161,8 @@ describe('debtsOverview', () => {
 
   it('dívida ativa já zerada não soma mínimo', () => {
     const d = makeDebt({ id: 'z', balance: 10000, minimumPayment: 5000, balanceDate: '2026-01-01' });
-    const ov = debtsOverview([d], [makeDebtPayment({ debtId: 'z', amount: 10000, date: '2026-02-01' })]);
+    // 10.000 + 2% de juros de janeiro = 10.200 pagos em fevereiro.
+    const ov = debtsOverview([d], [makeDebtPayment({ debtId: 'z', amount: 10200, date: '2026-02-01' })]);
     expect(ov.totalMinimum).toBe(0);
     expect(ov.totalBalance).toBe(0);
     expect(ov.weightedRate).toBe(0);
@@ -337,10 +374,11 @@ describe('toPayoffInputs', () => {
     const c = makeDebt({ id: 'c', name: 'C', balance: 20000, balanceDate: '2026-01-01' });
     const payments = [
       makeDebtPayment({ debtId: 'a', amount: 25000, date: '2026-03-01' }),
-      makeDebtPayment({ debtId: 'c', amount: 20000, date: '2026-03-01' }),
+      makeDebtPayment({ debtId: 'c', amount: 20808, date: '2026-03-01' }), // 20.000 + 2 meses a 2% => zera
     ];
+    // A: 100.000 → 103.000 → 106.090 (juros de jan e fev) − 25.000 = 81.090.
     expect(toPayoffInputs([a, b, c], payments)).toEqual([
-      { id: 'a', name: 'A', balance: 75000, monthlyRatePct: 3, minimumPayment: 5000 },
+      { id: 'a', name: 'A', balance: 81090, monthlyRatePct: 3, minimumPayment: 5000 },
     ]);
   });
 });

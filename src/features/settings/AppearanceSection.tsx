@@ -31,6 +31,7 @@ export function AppearanceSection({ settings }: { settings: Settings }) {
             <p className="text-xs text-slate-500 dark:text-slate-400">"Sistema" segue a configuração do aparelho.</p>
           </div>
           <SegmentedControl
+            mode="radio"
             aria-label="Tema"
             options={THEME_OPTIONS}
             value={settings.theme}

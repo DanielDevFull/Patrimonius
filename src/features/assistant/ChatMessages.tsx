@@ -4,7 +4,7 @@ import { cn } from '@/components/ui';
 import { AgentCardView } from './AgentCards';
 import { ChatActions, type ChatActionHandlers } from './ChatActions';
 import { formatMessageTime, type AgentMessagePayload } from './chat-utils';
-import { RichText } from './RichText';
+import { RichText, UserText } from './RichText';
 
 /** Avatar do agente. */
 export function PatAvatar({ size = 'md' }: { size?: 'md' | 'lg' }) {
@@ -27,7 +27,7 @@ function MessageTime({ createdAt, today, align }: { createdAt: string; today: IS
   return (
     <time
       dateTime={createdAt}
-      className={cn('block px-1 text-[11px] text-slate-400 dark:text-slate-500', align === 'right' && 'text-right')}
+      className={cn('block px-1 text-[11px] text-slate-500 dark:text-slate-400', align === 'right' && 'text-right')}
     >
       {label}
     </time>
@@ -66,7 +66,7 @@ export function MessageItem({
         <div className="flex max-w-[85%] flex-col items-end gap-1">
           <p className="sr-only">Você disse:</p>
           <div className="whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-brand-700 px-3.5 py-2 text-sm text-white shadow-sm">
-            {message.text}
+            <UserText text={message.text} />
           </div>
           <MessageTime createdAt={message.createdAt} today={today} align="right" />
         </div>
@@ -101,7 +101,7 @@ export function MessageItem({
                 onClick={() => onSuggestion(s)}
                 className="rounded-full border border-brand-200 bg-brand-50 px-3 py-1.5 text-left text-sm font-medium text-brand-800 transition-colors hover:bg-brand-100 disabled:opacity-50 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-300 dark:hover:bg-brand-900"
               >
-                {s}
+                <UserText text={s} />
               </button>
             ))}
           </div>

@@ -1,5 +1,6 @@
+import { diffMonths, monthKey } from '@/domain/dates';
 import type { Cents, Debt, DebtPayment, ISODate } from '@/domain/types';
-import { compareDesc, compareText } from './internal/common';
+import { compareDesc, compareRaw, compareText } from './internal/common';
 import type {
   DebtItemOverview,
   DebtsOverview,
@@ -19,18 +20,40 @@ function monthlyInterestOf(balance: Cents, monthlyRatePct: number): Cents {
 }
 
 /**
- * Saldo devedor atual: max(0, debt.balance - soma dos pagamentos da dívida com date >= debt.balanceDate
- * e date <= asOf (se informado)). Dívida 'quitada' retorna 0.
+ * Saldo devedor estimado, amortizando mês a mês a partir do saldo informado (`debt.balance` em `debt.balanceDate`):
+ * percorre, em ordem cronológica, os pagamentos da dívida com date >= balanceDate (e date <= asOf, se informado);
+ * antes de cada pagamento aplica os juros mensais (`interestRate` % a.m., arredondados ao centavo, como em
+ * simulatePayoff) uma vez para cada virada de mês desde o pagamento anterior (ou desde balanceDate) e então desconta
+ * o valor pago. Retorna max(0, saldo). Dívida 'quitada' retorna 0.
+ *
+ * Não depende de `today`: juros só são acumulados até o último pagamento considerado (o saldo exibido é o que restou
+ * depois da última parcela, como no extrato). Sem juros, equivale a `balance - soma dos pagamentos`.
+ * Pagamentos no mesmo mês do anterior não geram juros novos; empates de data seguem a criação e o id.
  */
 export function debtCurrentBalance(debt: Debt, payments: DebtPayment[], asOf?: ISODate): Cents {
   if (debt.status === 'quitada') return 0;
-  let paid = 0;
-  for (const p of payments) {
-    if (p.debtId !== debt.id || p.date < debt.balanceDate) continue;
-    if (asOf !== undefined && p.date > asOf) continue;
-    paid += p.amount;
+  const own = payments
+    .filter((p) => p.debtId === debt.id && p.date >= debt.balanceDate && (asOf === undefined || p.date <= asOf))
+    .sort((a, b) => compareRaw(a.date, b.date) || compareRaw(a.createdAt, b.createdAt) || compareRaw(a.id, b.id));
+  let balance = debt.balance;
+  let ref = monthKey(debt.balanceDate);
+  for (const p of own) {
+    const month = monthKey(p.date);
+    for (let i = diffMonths(ref, month); i > 0; i--) balance += monthlyInterestOf(balance, debt.interestRate);
+    balance -= p.amount;
+    ref = month;
   }
-  return Math.max(0, debt.balance - paid);
+  return Math.max(0, balance);
+}
+
+/**
+ * Valor que quita a dívida com um pagamento em `date`: o saldo estimado (debtCurrentBalance, ignorando o status)
+ * mais os juros das viradas de mês entre o último pagamento registrado (ou balanceDate) e `date`.
+ * Ex.: saldo de R$ 1.000,00 depois da parcela de setembro, 2% a.m. => quitar em outubro custa R$ 1.020,00.
+ */
+export function debtPayoffAmount(debt: Debt, payments: DebtPayment[], date: ISODate): Cents {
+  const probe: DebtPayment = { id: '', debtId: debt.id, amount: 0, date, note: '', transactionId: null, createdAt: '' };
+  return debtCurrentBalance({ ...debt, status: 'ativa' }, [...payments, probe]);
 }
 
 /**

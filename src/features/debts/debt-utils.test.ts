@@ -10,6 +10,7 @@ import {
   nextDueDate,
   payoffAdvice,
   payoffChartRows,
+  payoffPlanStatus,
   paymentsOf,
   validateDebtForm,
   validatePayment,
@@ -243,6 +244,54 @@ describe('payoffAdvice', () => {
       monthsSaved: 1,
       quickWin: null,
     });
+  });
+});
+
+describe('payoffPlanStatus', () => {
+  const cheque = { id: 'c', name: 'Cheque especial', balance: 80000, monthlyRatePct: 8, minimumPayment: 10000 };
+  const pessoal = {
+    id: 'e',
+    name: 'Empréstimo pessoal',
+    balance: 460000,
+    monthlyRatePct: 3.5,
+    minimumPayment: 40000,
+  };
+
+  it('viável quando o orçamento cobre os mínimos e quita tudo', () => {
+    const cmp = compareStrategies([cheque, pessoal], 55000);
+    expect(payoffPlanStatus(cmp.avalanche)).toBe('viavel');
+    expect(payoffPlanStatus(cmp.snowball)).toBe('viavel');
+  });
+
+  it('abaixo dos mínimos: a simulação quita, mas o plano não é viável (não diz "não quita em 50 anos")', () => {
+    // R$ 450 < mínimos de R$ 500: feasible=false, mas as duas dívidas zeram nos meses 17 e 18.
+    const cmp = compareStrategies([cheque, pessoal], 45000);
+    for (const p of [cmp.avalanche, cmp.snowball]) {
+      expect(p.feasible).toBe(false);
+      expect(p.payoffOrder.map((o) => o.month)).toEqual([17, 18]);
+      expect(payoffPlanStatus(p)).toBe('abaixo_minimos');
+    }
+  });
+
+  it('não quita em até 50 anos, inclusive quando só parte das dívidas acaba', () => {
+    const cartao = { id: 'k', name: 'Cartão', balance: 300000, monthlyRatePct: 12, minimumPayment: 30000 };
+    const emprestimo = { id: 'p', name: 'Empréstimo', balance: 100000, monthlyRatePct: 2, minimumPayment: 10000 };
+    const cmp = compareStrategies([cartao, emprestimo], 44000);
+    expect(cmp.snowball.payoffOrder.map((o) => o.name)).toEqual(['Empréstimo']);
+    expect(payoffPlanStatus(cmp.snowball)).toBe('nao_quita');
+    expect(payoffPlanStatus(cmp.avalanche)).toBe('viavel');
+    expect(
+      payoffPlanStatus(
+        plan({
+          feasible: false,
+          months: 600,
+          timeline: [
+            { month: 0, totalBalance: 100000 },
+            { month: 1, totalBalance: 101000 },
+          ],
+        }),
+      ),
+    ).toBe('nao_quita');
   });
 });
 

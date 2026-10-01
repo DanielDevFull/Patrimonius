@@ -3,9 +3,17 @@ import userEvent from '@testing-library/user-event';
 import { useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '@/db/db';
-import { addAccount, addTransaction, type NewTransactionInput } from '@/db/repo';
+import {
+  addAccount,
+  addDebtPayment,
+  addGoalContribution,
+  addTransaction,
+  deleteTransaction,
+  type NewTransactionInput,
+} from '@/db/repo';
 import { CATEGORY_IDS } from '@/domain/defaults';
 import type { Account } from '@/domain/types';
+import { makeDebt, makeGoal } from '@/test/factories';
 import { renderWithProviders, resetDb } from '@/test/render';
 import TransactionsPage from './TransactionsPage';
 
@@ -71,7 +79,7 @@ async function formDialog(name: string) {
 function listDescriptions() {
   return screen
     .queryAllByRole('listitem')
-    .map((li) => li.querySelector('.truncate')?.textContent ?? '')
+    .map((li) => li.querySelector('.line-clamp-2')?.textContent ?? '')
     .filter(Boolean);
 }
 
@@ -91,14 +99,14 @@ describe('TransactionsPage', () => {
     expect(await screen.findByText('Nenhum lançamento ainda')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Registrar primeiro lançamento' }));
     const dialog = await formDialog('Novo lançamento');
-    expect(dialog.getByRole('tab', { name: 'Despesa' })).toHaveAttribute('aria-selected', 'true');
+    expect(dialog.getByRole('radio', { name: 'Despesa' })).toBeChecked();
   });
 
   it('?novo=receita abre o formulário de receita e remove o parâmetro da URL', async () => {
     await seedAccount('Banco');
     await renderPage('/lancamentos?novo=receita');
     const dialog = await formDialog('Novo lançamento');
-    expect(dialog.getByRole('tab', { name: 'Receita' })).toHaveAttribute('aria-selected', 'true');
+    expect(dialog.getByRole('radio', { name: 'Receita' })).toBeChecked();
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/lancamentos$/));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
@@ -305,6 +313,83 @@ describe('TransactionsPage', () => {
     const left = (await db.transactions.toArray()).map((t) => t.installment!.number).sort();
     expect(left).toEqual([1, 2]);
     expect(await screen.findByText('2 parcelas excluídas.')).toBeInTheDocument();
+  });
+
+  it('excluir parcela usa as parcelas que ainda existem nos rótulos', async () => {
+    const banco = await seedAccount('Banco');
+    const parcelas = await tx(banco.id, {
+      amount: 40000,
+      description: 'TV',
+      categoryId: CATEGORY_IDS.compras,
+      date: '2026-07-15',
+      installments: 4,
+    });
+    await deleteTransaction(parcelas[2].id); // a 3/4 já foi excluída
+    const user = await renderPage();
+    await user.click(row('TV (4/4)').getByRole('button', { name: 'Ações de TV (4/4)' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Excluir' }));
+    const modal = within(await screen.findByRole('dialog', { name: 'Excluir parcela' }));
+    expect(modal.getByText('Parcela 4 de 4. O que você quer excluir?')).toBeInTheDocument();
+    expect(modal.queryByRole('button', { name: 'Todas as 4 parcelas' })).not.toBeInTheDocument();
+    expect(modal.queryByRole('button', { name: /Esta e as próximas/ })).not.toBeInTheDocument();
+    await user.click(modal.getByRole('button', { name: 'Todas as 3 parcelas' }));
+    expect(await screen.findByText('3 parcelas excluídas.')).toBeInTheDocument();
+    await waitFor(async () => expect(await db.transactions.count()).toBe(0));
+  });
+
+  it('excluir o lançamento de um pagamento de dívida avisa do vínculo e pode excluir os dois', async () => {
+    const banco = await seedAccount('Banco', { initialBalance: 300000 });
+    const debt = makeDebt({ name: 'Crediário loja', balance: 100000, balanceDate: '2026-10-01' });
+    await db.debts.add(debt);
+    await addDebtPayment({ debtId: debt.id, amount: 10000, date: '2026-10-10', fromAccountId: banco.id });
+    const user = await renderPage();
+    const description = 'Pagamento: Crediário loja';
+    await user.click(row(description).getByRole('button', { name: `Ações de ${description}` }));
+    await user.click(screen.getByRole('menuitem', { name: 'Excluir' }));
+    const modal = within(await screen.findByRole('dialog', { name: 'Excluir lançamento?' }));
+    expect(modal.getByText(`“${description}” é o pagamento da dívida “Crediário loja”.`)).toBeInTheDocument();
+    expect(modal.getByText(/a dívida continua abatida/)).toBeInTheDocument();
+    await user.click(modal.getByRole('button', { name: 'Excluir lançamento e pagamento' }));
+    expect(await screen.findByText('Lançamento e pagamento da dívida excluídos.')).toBeInTheDocument();
+    await waitFor(async () => expect(await db.transactions.count()).toBe(0));
+    expect(await db.debtPayments.count()).toBe(0);
+  });
+
+  it('excluir só o lançamento de um aporte mantém o aporte na meta', async () => {
+    const banco = await seedAccount('Banco', { initialBalance: 300000 });
+    const goal = makeGoal({ name: 'Viagem', accountId: null });
+    await db.goals.add(goal);
+    await addGoalContribution({
+      goalId: goal.id,
+      amount: 20000,
+      date: '2026-10-10',
+      fromAccountId: banco.id,
+    });
+    const user = await renderPage();
+    const description = 'Aporte: Viagem';
+    await user.click(row(description).getByRole('button', { name: `Ações de ${description}` }));
+    await user.click(screen.getByRole('menuitem', { name: 'Excluir' }));
+    const modal = within(await screen.findByRole('dialog', { name: 'Excluir lançamento?' }));
+    expect(modal.getByText(`“${description}” é o aporte da meta “Viagem”.`)).toBeInTheDocument();
+    await user.click(modal.getByRole('button', { name: 'Excluir só o lançamento' }));
+    expect(await screen.findByText('Lançamento excluído.')).toBeInTheDocument();
+    await waitFor(async () => expect(await db.transactions.count()).toBe(0));
+    const [contribution] = await db.goalContributions.toArray();
+    expect(contribution).toMatchObject({ amount: 20000, transactionId: null });
+  });
+
+  it('celular (360 px): descrição pode usar 2 linhas e os filtros ficam em 1 coluna para não cortar o texto', async () => {
+    const banco = await seedAccount('Banco');
+    await tx(banco.id, { description: 'Pagamento da fatura do cartão' });
+    await renderPage();
+    const description = await screen.findByText('Pagamento da fatura do cartão');
+    // Antes: `truncate` (1 linha) deixava ~8 caracteres visíveis em 360 px.
+    expect(description).toHaveClass('line-clamp-2', 'sm:line-clamp-1');
+    expect(description).not.toHaveClass('truncate');
+    // Antes: grid-cols-2 em qualquer largura mostrava "Todos os ti…" / "Todas as si…".
+    const filters = screen.getByLabelText('Filtrar por tipo').parentElement!;
+    expect(filters).toHaveClass('grid-cols-1', 'min-[460px]:grid-cols-2', 'lg:grid-cols-4');
+    expect(filters).not.toHaveClass('grid-cols-2');
   });
 
   it('cria lançamento pelo botão do cabeçalho e ele aparece na lista', async () => {

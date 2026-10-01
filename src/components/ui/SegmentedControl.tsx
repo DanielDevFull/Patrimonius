@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent } from 'react';
 import { cn } from './cn';
 import { segmentPanelId, segmentTabId } from './segment-ids';
 
@@ -28,7 +28,22 @@ export function SegmentedControl<T extends string>({
   ...rest
 }: SegmentedControlProps<T>) {
   const buttonsRef = useRef<(HTMLButtonElement | null)[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
   const isTabs = mode === 'tabs';
+  const selectedIndex = options.findIndex((o) => o.value === value);
+
+  // Barra estreita (celular) rola na horizontal: traz a opção selecionada para a vista — ao abrir por link direto
+  // (?aba=quitar) e ao navegar pelas setas. Ajusta só o scrollLeft da barra (sem rolar a página).
+  useEffect(() => {
+    const list = listRef.current;
+    const button = buttonsRef.current[selectedIndex];
+    if (!list || !button || list.scrollWidth <= list.clientWidth) return;
+    const area = list.getBoundingClientRect();
+    const item = button.getBoundingClientRect();
+    const margin = 8;
+    if (item.left < area.left) list.scrollLeft -= area.left - item.left + margin;
+    else if (item.right > area.right) list.scrollLeft += item.right - area.right + margin;
+  }, [selectedIndex]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, index: number) => {
     let next = -1;
@@ -44,6 +59,7 @@ export function SegmentedControl<T extends string>({
 
   return (
     <div
+      ref={listRef}
       role={isTabs ? 'tablist' : 'radiogroup'}
       aria-label={rest['aria-label']}
       className={cn('inline-flex max-w-full overflow-x-auto rounded-xl bg-slate-100 p-1 dark:bg-slate-800', className)}

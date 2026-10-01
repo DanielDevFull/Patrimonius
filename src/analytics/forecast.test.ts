@@ -162,9 +162,9 @@ describe('cashflowForecast', () => {
     it('meses sem lançamentos não diluem a média', () => {
       const data = makeData({
         accounts: [chk],
-        transactions: [tx({ accountId: 'chk', amount: 30000, date: '2026-09-10' })],
+        transactions: [tx({ accountId: 'chk', amount: 30000, date: '2026-09-01' })],
       });
-      // só setembro (30 dias) tem dados: 1000/dia
+      // só setembro (30 dias, registrado desde o dia 1º) tem dados: 1000/dia
       expect(cashflowForecast(data, '2026-10-10').projectedVariableSpending).toBe(21000);
       // no último dia do mês não há dias restantes
       expect(cashflowForecast(data, '2026-10-31').projectedVariableSpending).toBe(0);
@@ -173,13 +173,42 @@ describe('cashflowForecast', () => {
     it('distribui o gasto variável em centavos inteiros e fecha exatamente no saldo final', () => {
       const data = makeData({
         accounts: [chk],
-        transactions: [tx({ accountId: 'chk', amount: 10000, date: '2026-09-10' })],
+        transactions: [tx({ accountId: 'chk', amount: 10000, date: '2026-09-01' })],
       });
       const f = cashflowForecast(data, '2026-10-10');
       // 10000 / 30 × 21 = 7000
       expect(f.projectedVariableSpending).toBe(7000);
       expect(f.points.every((p) => Number.isInteger(p.balance))).toBe(true);
       expect(f.points[f.points.length - 1].balance).toBe(f.projectedEndBalance);
+    });
+
+    it('o mês em que o registro começou conta só pelos dias registrados (não dilui a média)', () => {
+      // Começou a usar o app em 20/09: salário lançado em 05/09 e R$ 100,00 de mercado por dia de 20 a 30/09.
+      const groceries = Array.from({ length: 11 }, (_, i) =>
+        tx({ accountId: 'chk', amount: 10000, date: `2026-09-${20 + i}` }),
+      );
+      const data = makeData({
+        accounts: [makeAccount({ id: 'chk', initialBalance: 400000, createdAt: '2026-09-20T12:00:00.000Z' })],
+        transactions: [
+          tx({ accountId: 'chk', type: 'receita', amount: 500000, date: '2026-09-05', categoryId: 'cat-salario' }),
+          ...groceries,
+        ],
+      });
+      // 1.100 em 11 dias = 100/dia × 30 dias restantes (antes: 1.100 ÷ 30 dias de setembro => 1.100).
+      expect(cashflowForecast(data, '2026-10-01').projectedVariableSpending).toBe(300000);
+    });
+
+    it('dinheiro de terceiros (fora do patrimônio) não entra no caixa', () => {
+      const data = makeData({
+        accounts: [
+          makeAccount({ id: 'chk', initialBalance: 300000 }),
+          makeAccount({ id: 'emp', name: 'Conta da empresa', initialBalance: 1000000, includeInNetWorth: false }),
+        ],
+        transactions: [tx({ accountId: 'emp', amount: 50000, date: '2026-10-20', status: 'pendente' })],
+      });
+      const f = cashflowForecast(data, '2026-10-10');
+      expect(f.currentBalance).toBe(300000);
+      expect(f.expectedExpense).toBe(0);
     });
   });
 

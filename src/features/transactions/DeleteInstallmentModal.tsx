@@ -6,16 +6,28 @@ export type DeleteScope = 'one' | 'future' | 'group';
 export interface DeleteInstallmentModalProps {
   /** Parcela a excluir (o modal fica aberto enquanto não for null). */
   transaction: Transaction | null;
+  /** Quantas parcelas da compra ainda existem (algumas podem já ter sido excluídas). */
+  groupCount: number;
+  /** Quantas parcelas existentes são esta ou as seguintes (número >= o desta). */
+  futureCount: number;
   onClose: () => void;
   onConfirm: (scope: DeleteScope) => void;
 }
 
-/** Pergunta o alcance da exclusão de uma parcela: só esta, esta e as próximas, ou todas. */
-export function DeleteInstallmentModal({ transaction, onClose, onConfirm }: DeleteInstallmentModalProps) {
+/**
+ * Pergunta o alcance da exclusão de uma parcela: só esta, esta e as próximas, ou todas.
+ * Os rótulos usam as parcelas que ainda existem, não o total original da compra.
+ */
+export function DeleteInstallmentModal({
+  transaction,
+  groupCount,
+  futureCount,
+  onClose,
+  onConfirm,
+}: DeleteInstallmentModalProps) {
   const info = transaction?.installment;
-  const hasNext = !!info && info.number < info.total;
-  const isFirst = !!info && info.number === 1;
-  const remaining = info ? info.total - info.number + 1 : 0;
+  // "Esta e as próximas" só faz sentido se alcança mais de uma parcela e não é o mesmo que "todas".
+  const showFuture = futureCount > 1 && futureCount < groupCount;
   return (
     <Modal
       open={!!info}
@@ -33,14 +45,16 @@ export function DeleteInstallmentModal({ transaction, onClose, onConfirm }: Dele
         <Button variant="secondary" fullWidth onClick={() => onConfirm('one')} data-autofocus>
           Só esta parcela
         </Button>
-        {hasNext && !isFirst && (
+        {showFuture && (
           <Button variant="secondary" fullWidth onClick={() => onConfirm('future')}>
-            Esta e as próximas ({remaining})
+            Esta e as próximas ({futureCount})
           </Button>
         )}
-        <Button variant="danger" fullWidth onClick={() => onConfirm('group')}>
-          Todas as {info?.total ?? ''} parcelas
-        </Button>
+        {groupCount > 1 && (
+          <Button variant="danger" fullWidth onClick={() => onConfirm('group')}>
+            Todas as {groupCount} parcelas
+          </Button>
+        )}
       </div>
     </Modal>
   );

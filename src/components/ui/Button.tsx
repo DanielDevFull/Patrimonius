@@ -19,7 +19,8 @@ const VARIANTS: Record<ButtonVariant, string> = {
     'bg-white text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-600 dark:hover:bg-slate-700',
   ghost: 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
   danger: 'bg-rose-600 text-white hover:bg-rose-700 shadow-sm disabled:bg-rose-600/50',
-  success: 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm disabled:bg-emerald-600/50',
+  // emerald-700: texto branco com contraste AA (≈5,4:1); emerald-600 dá só 3,65:1.
+  success: 'bg-emerald-700 text-white hover:bg-emerald-800 shadow-sm disabled:bg-emerald-700/50',
 };
 
 const SIZES: Record<ButtonSize, string> = {

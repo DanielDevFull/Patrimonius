@@ -1,12 +1,19 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { suggestCategory } from '@/agent/categorizer';
 import { db } from '@/db/db';
 import { addAccount, addTransaction } from '@/db/repo';
 import { CATEGORY_IDS } from '@/domain/defaults';
 import type { Account } from '@/domain/types';
 import { renderWithProviders, resetDb } from '@/test/render';
 import { TransactionFormModal } from './TransactionForm';
+
+// Mesmo categorizador, só observado (para contar quantas vezes a sugestão é recalculada).
+vi.mock('@/agent/categorizer', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/agent/categorizer')>();
+  return { ...actual, suggestCategory: vi.fn(actual.suggestCategory) };
+});
 
 const TODAY = '2026-10-15';
 
@@ -58,7 +65,7 @@ describe('TransactionFormModal', () => {
     expect(screen.getByText('Sugerida automaticamente pelo Pat')).toBeInTheDocument();
     expect(screen.getByLabelText('Conta ou cartão')).toHaveValue(banco.id);
     expect(screen.getByLabelText('Data')).toHaveValue(TODAY);
-    expect(screen.getByRole('tab', { name: 'Pago' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('radio', { name: 'Pago' })).toBeChecked();
     await user.type(screen.getByLabelText('Tags'), 'casa, Casa, mensal');
     await user.click(screen.getByRole('button', { name: 'Salvar' }));
 
@@ -80,6 +87,19 @@ describe('TransactionFormModal', () => {
     });
     expect(onSaved).toHaveBeenCalledWith([expect.objectContaining({ id: txs[0].id, amount: 4590 })]);
     expect(await screen.findByText('Despesa salva.')).toBeInTheDocument();
+  });
+
+  it('digitar a descrição recalcula a sugestão no máximo uma vez por tecla (só com o valor adiado)', async () => {
+    await seedAccount('Banco');
+    const { user } = renderForm();
+    const description = await screen.findByLabelText('Descrição');
+    vi.mocked(suggestCategory).mockClear();
+    await user.type(description, 'Mercado');
+    await waitFor(() => expect(screen.getByLabelText('Categoria')).toHaveValue(CATEGORY_IDS.mercado));
+    const calls = vi.mocked(suggestCategory).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.length).toBeLessThanOrEqual('Mercado'.length);
+    expect(calls.at(-1)?.[0]).toBe('Mercado');
   });
 
   it('valida campos em pt-BR e usa o nome da categoria quando a descrição fica vazia', async () => {
@@ -107,12 +127,33 @@ describe('TransactionFormModal', () => {
     });
   });
 
+  it('ano digitado errado na data (ex.: 0226) não salva um lançamento escondido', async () => {
+    await seedAccount('Banco');
+    const { user, onClose } = renderForm();
+    await user.type(await screen.findByLabelText('Valor'), '150');
+    await user.type(screen.getByLabelText('Descrição'), 'Mercado');
+    const date = screen.getByLabelText('Data');
+    expect(date).toHaveAttribute('min', '1900-01-01');
+    expect(date).toHaveAttribute('max', '2036-12-31');
+    fireEvent.change(date, { target: { value: '0226-01-10' } });
+    await user.click(screen.getByRole('button', { name: 'Salvar' }));
+    expect(screen.getByText('Confira o ano da data.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Data')).toHaveFocus();
+    expect(await db.transactions.count()).toBe(0);
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Data'), { target: { value: '2026-01-10' } });
+    await user.click(screen.getByRole('button', { name: 'Salvar' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect((await db.transactions.toArray())[0]).toMatchObject({ date: '2026-01-10', amount: 15000 });
+  });
+
   it('data futura deixa a situação pendente por padrão', async () => {
     await seedAccount('Banco');
     renderForm();
     await screen.findByLabelText('Valor');
     fireEvent.change(screen.getByLabelText('Data'), { target: { value: '2026-10-20' } });
-    expect(screen.getByRole('tab', { name: 'Pendente' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('radio', { name: 'Pendente' })).toBeChecked();
   });
 
   it('cria compra parcelada em 3x com soma exata e parcelas seguintes pendentes', async () => {
@@ -157,7 +198,7 @@ describe('TransactionFormModal', () => {
     const poupanca = await seedAccount('Poupança', { type: 'poupanca', icon: '🐷' });
     const { user, onClose } = renderForm();
     await screen.findByLabelText('Valor');
-    await user.click(screen.getByRole('tab', { name: 'Transferência' }));
+    await user.click(screen.getByRole('radio', { name: 'Transferência' }));
     expect(screen.queryByLabelText('Categoria')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Parcelas')).not.toBeInTheDocument();
     expect(screen.queryByRole('switch', { name: /Repetir todo mês/ })).not.toBeInTheDocument();
@@ -234,7 +275,7 @@ describe('TransactionFormModal', () => {
     const poupanca = await seedAccount('Poupança', { type: 'poupanca' });
     const { user, onClose } = renderForm();
     await screen.findByLabelText('Valor');
-    await user.click(screen.getByRole('tab', { name: 'Receita' }));
+    await user.click(screen.getByRole('radio', { name: 'Receita' }));
     await user.type(screen.getByLabelText('Valor'), '120');
     await user.type(screen.getByLabelText('Descrição'), 'Freela de design');
     await user.selectOptions(screen.getByLabelText('Categoria'), CATEGORY_IDS.rendaExtra);
@@ -250,7 +291,7 @@ describe('TransactionFormModal', () => {
     expect(screen.getByLabelText('Descrição')).toHaveValue('');
     expect(screen.getByLabelText('Observações')).toHaveValue('');
     expect(screen.getByLabelText('Categoria')).toHaveValue('');
-    expect(screen.getByRole('tab', { name: 'Receita' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('radio', { name: 'Receita' })).toBeChecked();
     expect(screen.getByLabelText('Conta')).toHaveValue(poupanca.id);
     expect(screen.getByLabelText('Data')).toHaveValue('2026-10-10');
     const [tx] = await db.transactions.toArray();
@@ -293,14 +334,14 @@ describe('TransactionFormModal', () => {
     expect(screen.getByText('Parcela 2 de 3: as alterações valem só para esta parcela.')).toBeInTheDocument();
     expect(screen.queryByLabelText('Parcelas')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Salvar e novo' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Transferência' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Transferência' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Valor')).toHaveValue('100,00');
     expect(screen.getByLabelText('Descrição')).toHaveValue('Bicicleta (2/3)');
 
     const amount = screen.getByLabelText('Valor');
     await user.clear(amount);
     await user.type(amount, '120');
-    await user.click(dialog().getByRole('tab', { name: 'Pago' }));
+    await user.click(dialog().getByRole('radio', { name: 'Pago' }));
     await user.click(screen.getByRole('button', { name: 'Salvar' }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
 
@@ -330,7 +371,7 @@ describe('TransactionFormModal', () => {
     expect(await screen.findByLabelText('Valor')).toHaveValue('89,90');
     expect(screen.getByLabelText('Categoria')).toHaveValue(CATEGORY_IDS.lazer);
     expect(screen.queryByText('Sugerida automaticamente pelo Pat')).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Pendente' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('radio', { name: 'Pendente' })).toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Salvar' }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     const [tx] = await db.transactions.toArray();

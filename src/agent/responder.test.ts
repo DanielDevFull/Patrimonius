@@ -113,7 +113,13 @@ describe('respond — registrar despesa', () => {
     expect(r.text).toContain('Qual foi o valor?');
     expect(r.text).toContain('💡 Contas da casa');
     expect(r.actions).toEqual([]);
-    expect(state).toEqual({ lastIntent: 'registrar_despesa', lastCategoryId: CATEGORY_IDS.contas });
+    // O que já foi dito fica guardado para o valor que vier em seguida.
+    expect(state).toEqual({
+      lastIntent: 'registrar_despesa',
+      lastCategoryId: CATEGORY_IDS.contas,
+      lastEntities: { categoryId: CATEGORY_IDS.contas, categoryConfidence: 0.85, description: 'conta de luz' },
+      awaitingAmount: true,
+    });
   });
 
   it('mostra o impacto no orçamento da categoria', () => {
@@ -225,6 +231,25 @@ describe('respond — consultas de saldo, gastos e receitas', () => {
     const list = card(r, 'list', 'Saldos por conta');
     expect(list.items.map((i) => i.value)).toEqual(['R$ 17.550,00', 'R$ 10.000,00', '-R$ 923,60']);
     expect(list.items[2].tone).toBe('negative');
+  });
+
+  it('saldo geral: conta fora do patrimônio aparece na lista, mas não entra nos totais (como no Painel e em Contas)', () => {
+    const scenario = makeScenario();
+    const data = {
+      ...scenario,
+      accounts: [
+        ...scenario.accounts,
+        makeAccount({ id: 'acc-conjunta', name: 'Conta conjunta', initialBalance: 500000, includeInNetWorth: false }),
+      ],
+    };
+    const r = reply('qual meu saldo?', data);
+    // Antes: R$ 32.550,00 disponíveis e saldo total de R$ 31.626,40 (somava os R$ 5.000,00 da conta conjunta).
+    expect(r.text).toContain('Você tem **R$ 27.550,00** disponíveis nas contas.');
+    expect(r.text).toContain('Saldo total: **R$ 26.626,40**.');
+    expect(r.text).toContain('Conta conjunta está fora do patrimônio e não entra nesses totais.');
+    expect(card(r, 'stat', 'Disponível nas contas').value).toBe('R$ 27.550,00');
+    const list = card(r, 'list', 'Saldos por conta');
+    expect(list.items.at(-1)).toMatchObject({ value: 'R$ 5.000,00', hint: 'Conta corrente · fora do patrimônio' });
   });
 
   it('saldo de uma conta e fatura do cartão com limite disponível', () => {
@@ -393,10 +418,12 @@ describe('respond — orçamentos', () => {
 
 describe('respond — metas', () => {
   it('criar meta com prazo: aporte mensal e ação create_goal', () => {
-    const r = reply('criar meta viagem de 10 mil até dezembro de 2027');
+    // Sem a meta "Viagem" do cenário (com ela, o Pat avisa da duplicata — ver os testes de regressão).
+    const r = reply('criar meta viagem de 10 mil até dezembro de 2027', makeScenario({ goals: [], goalContributions: [] }));
     expect(r.intent).toBe('criar_meta');
     expect(r.text).toContain('Ótimo objetivo, Ana! Meta ✈️ “Viagem”: **R$ 10.000,00** até 31/12/2027.');
-    expect(r.text).toContain('guarde **R$ 714,29** por mês durante 14 meses');
+    // out/2026 a dez/2027: 15 meses de aporte (o mês atual também conta, como em goalProgress).
+    expect(r.text).toContain('guarde **R$ 666,67** por mês durante 15 meses');
     expect(r.text).toContain('Cabe na sua sobra média');
     expect(action(r, 'create_goal').draft).toMatchObject({
       name: 'Viagem',
@@ -406,6 +433,21 @@ describe('respond — metas', () => {
       priority: 'media',
       status: 'ativa',
     });
+  });
+
+  it('quem investe toda a sobra não ouve que "os gastos consomem toda a renda"', () => {
+    // Jul–set: renda 5.000, moradia 3.000 e 2.000 em Investimentos e reserva.
+    const data = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 1000000 })],
+      transactions: ['2026-07', '2026-08', '2026-09'].flatMap((m) => [
+        tx({ accountId: 'cc', type: 'receita', amount: 500000, date: `${m}-05`, categoryId: CATEGORY_IDS.salario }),
+        tx({ accountId: 'cc', amount: 300000, date: `${m}-06`, categoryId: CATEGORY_IDS.moradia }),
+        tx({ accountId: 'cc', amount: 200000, date: `${m}-07`, categoryId: CATEGORY_IDS.investimentos }),
+      ]),
+    });
+    const r = reply('criar meta viagem de 3 mil até dezembro de 2027', data);
+    expect(r.text).not.toContain('consomem toda a renda');
+    expect(r.text).toContain('Cabe na sua sobra média de R$ 2.000,00 por mês.');
   });
 
   it('meta de reserva: prioridade alta e aviso de que é orientação geral', () => {
@@ -729,5 +771,224 @@ describe('greeting', () => {
   it('usa o nome do agente configurado', () => {
     const base = makeData();
     expect(greeting(makeData({ settings: { ...base.settings, agentName: 'Fin' } }), TODAY).text).toContain('Eu sou o Fin');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Regressões da revisão do agente                                    */
+/* ------------------------------------------------------------------ */
+
+/** Cenário com o pagamento da fatura agendado e parcelas futuras no cartão. */
+function withScheduledCard(extra = 20000): FinanceData {
+  return makeScenario({
+    transactions: [
+      ...baseTransactions(),
+      tx({ type: 'transferencia', amount: 92360, date: '2026-10-20', accountId: ACC.corrente, toAccountId: ACC.cartao, status: 'pendente', categoryId: null, description: 'Pagamento da fatura' }),
+      tx({ amount: extra, date: '2026-11-12', accountId: ACC.cartao, status: 'pendente', categoryId: CATEGORY_IDS.compras, description: 'TV (2/10)' }),
+    ],
+  });
+}
+
+describe('respond — regressões: cartão, fatura e contas a pagar', () => {
+  it('limite disponível = limite − (fatura em aberto + parcelas futuras); o pagamento agendado não abate', () => {
+    const r = reply('saldo do cartão', withScheduledCard());
+    expect(r.text).toContain('A fatura em aberto do Cartão Nubank é **R$ 923,60**.');
+    expect(r.text).toContain('Há um pagamento de R$ 923,60 agendado');
+    // 5.000 − (923,60 + 200) = 3.876,40 (antes: 4.800, menos que a fatura informada na mesma frase).
+    expect(r.text).toContain('Limite disponível: R$ 3.876,40 de R$ 5.000,00');
+  });
+
+  it.each(['qual a fatura do cartão?', 'quanto devo no cartão?', 'quando vence a fatura?', 'quanto tenho de limite no cartão?'])(
+    '"%s" responde com a fatura do cartão',
+    (text) => {
+      const r = reply(text);
+      expect(r.intent).toBe('consultar_saldo');
+      expect(r.text).toContain('A fatura em aberto do Cartão Nubank é **R$ 923,60**.');
+      expect(r.text).toContain('O próximo vencimento é');
+    },
+  );
+
+  it('"dívidas do cartão" inclui a fatura (com dívida de cartão cadastrada) ou responde com ela', () => {
+    const withDebts = reply('minhas dívidas do cartão', makeScenario({ debts: DEBTS }));
+    expect(withDebts.intent).toBe('status_dividas');
+    expect(withDebts.text).toContain('Além disso, as faturas em aberto dos cartões somam R$ 923,60.');
+    const noCardDebt = reply('minhas dívidas do cartão', makeScenario({ debts: [DEBTS[1]] }));
+    expect(noCardDebt.text).toContain('A fatura em aberto do Cartão Nubank é **R$ 923,60**.');
+  });
+
+  it('contas a pagar: lista a fatura (pagamento agendado) e não as compras no cartão', () => {
+    const r = reply('contas a pagar', withScheduledCard());
+    const items = card(r, 'list', 'Contas a pagar').items.map((i) => i.label);
+    expect(items).toContain('Fatura Cartão Nubank');
+    expect(items).not.toContain('TV (2/10)');
+    expect(r.text).toContain('somando **R$ 923,60**');
+  });
+
+  it('contas a pagar: sem pagamento agendado, a fatura em aberto entra no vencimento do cartão', () => {
+    const r = reply('contas a pagar nos próximos 30 dias');
+    const fatura = card(r, 'list', 'Contas a pagar').items.find((i) => i.label === 'Fatura Cartão Nubank (em aberto)');
+    expect(fatura).toMatchObject({ value: 'R$ 923,60' });
+  });
+});
+
+describe('respond — regressões: registros', () => {
+  it('"em 10x de 50" registra R$ 500,00 em 10 parcelas de R$ 50,00', () => {
+    const r = reply('comprei um fone em 10x de 50');
+    expect(r.text).toContain('compra parcelada de R$ 500,00 (10x de R$ 50,00)');
+    expect(action(r, 'create_transaction').draft).toMatchObject({ amount: 50000, installments: 10 });
+  });
+
+  it('"paguei 923,60 da fatura do cartão" é pagamento de fatura, não despesa no cartão', () => {
+    const r = reply('paguei 923,60 da fatura do cartão');
+    expect(r.intent).toBe('registrar_transferencia');
+    expect(action(r, 'create_transaction').draft).toMatchObject({
+      type: 'transferencia',
+      accountId: ACC.corrente,
+      toAccountId: ACC.cartao,
+      amount: 92360,
+    });
+  });
+
+  it('quantidade antes do preço: usa o preço e avisa da ambiguidade', () => {
+    const r = reply('comprei 2 pizzas de 40');
+    expect(action(r, 'create_transaction').draft.amount).toBe(4000);
+    expect(r.text).toContain('se foi R$ 40,00 cada, o total é R$ 80,00');
+    expect(r.suggestions).toContain('Gastei 80,00 em pizzas');
+  });
+
+  it('período citado vira data aproximada com aviso', () => {
+    const r = reply('gastei 300 no mercado mês passado');
+    expect(action(r, 'create_transaction').draft.date).toBe('2026-09-30');
+    expect(r.text).toContain('Como você não disse o dia, usei 30/09/2026 (mês passado)');
+  });
+
+  it('dois gastos na mesma mensagem: avisa e sugere o segundo', () => {
+    const r = reply('gastei 50 no mercado e 30 na farmácia');
+    expect(action(r, 'create_transaction').draft).toMatchObject({ amount: 5000, description: 'Mercado', categoryId: CATEGORY_IDS.mercado });
+    expect(r.text).toContain('Você citou mais um lançamento (“30 na farmácia”)');
+    expect(r.suggestions[0]).toBe('Gastei 30 na farmácia');
+  });
+
+  it('"recebi o 13º salário de 4800" é R$ 4.800,00', () => {
+    expect(action(reply('recebi o 13º salário de 4800'), 'create_transaction').draft.amount).toBe(480000);
+  });
+
+  it('"tirei 200 da poupança" é transferência para a conta corrente', () => {
+    expect(action(reply('tirei 200 da poupança'), 'create_transaction').draft).toMatchObject({
+      type: 'transferencia',
+      accountId: ACC.poupanca,
+      toAccountId: ACC.corrente,
+    });
+  });
+});
+
+describe('respond — regressões: consultas', () => {
+  it('"compara setembro com agosto" compara os dois meses citados', () => {
+    const r = reply('compara setembro com agosto');
+    expect(r.text).toContain('Setembro de 2026: despesas de **R$ 3.305,90**');
+    expect(r.text).toContain('Agosto de 2026: despesas de **R$ 3.305,90**');
+    expect(r.text).not.toContain('Outubro');
+    const mercado = reply('compara mercado de agosto com setembro');
+    expect(mercado.text).toContain('Com 🛒 Mercado: **R$ 900,00** em setembro de 2026 contra **R$ 900,00** em agosto de 2026.');
+  });
+
+  it('"despesas do mês passado" é o total do mês, não "Outras despesas"', () => {
+    const r = reply('despesas do mes passado');
+    expect(r.text).toContain('No mês passado, você gastou **R$ 3.305,90**');
+    expect(r.text).not.toContain('Outras despesas');
+    expect(reply('quais minhas receitas?').text).toContain('você recebeu **R$ 6.000,00**');
+  });
+
+  it('"qual meu maior gasto?" responde sobre o mês atual', () => {
+    const r = reply('qual meu maior gasto?');
+    expect(r.intent).toBe('maiores_gastos');
+    expect(r.text).toMatch(/^Este mês/);
+  });
+
+  it('pergunta por estabelecimento filtra pela descrição (ou diz que não encontrou)', () => {
+    const netflix = reply('quanto gastei com netflix?');
+    expect(netflix.text).toContain('Este mês, você gastou **R$ 55,90** com “netflix” em 1 lançamento.');
+    const ifood = reply('quanto gastei com ifood?');
+    expect(ifood.text).toContain('Não encontrei lançamentos com “ifood” este mês.');
+    expect(ifood.text).toContain('🍽️ Restaurantes e delivery');
+  });
+
+  it('resumo do mês corrente separa o que já entrou do que está previsto', () => {
+    const data = makeScenario({
+      transactions: [
+        ...baseTransactions(),
+        tx({ type: 'receita', amount: 100000, date: '2026-10-25', status: 'pendente', description: 'Freela', categoryId: CATEGORY_IDS.rendaExtra }),
+      ],
+    });
+    const r = reply('resumo do mês', data);
+    expect(r.text).toContain('Resumo de outubro de 2026 até agora: entraram **R$ 6.000,00** e saíram **R$ 2.455,90**.');
+    expect(r.text).toContain('R$ 1.000,00 a receber');
+    expect(r.text).toContain('Contando os pendentes, o mês deve fechar com sobra de **R$ 4.544,10**');
+    expect(r.text).not.toContain('você poupou');
+  });
+
+  it('alerta só pelo ritmo mostra a projeção, não um percentual baixo', () => {
+    const data = makeScenario({
+      transactions: [...baseTransactions(), tx({ amount: 20000, date: '2026-10-12', description: 'Mercado', categoryId: CATEGORY_IDS.mercado })],
+    });
+    expect(reply('como está meu orçamento?', data).text).toContain('🛒 Mercado (50% usado; no ritmo atual, ~R$ 1.033,33)');
+  });
+
+  it('no 1º dia do mês, um gasto pequeno não deixa o orçamento "em alerta"', () => {
+    const data = makeScenario({
+      transactions: [
+        ...baseTransactions().filter((t) => t.date < '2026-10-01'),
+        tx({ amount: 5000, date: '2026-10-01', description: 'Mercado', categoryId: CATEGORY_IDS.mercado }),
+      ],
+    });
+    expect(respond('como está meu orçamento?', data, '2026-10-01', {}).reply.text).not.toContain('Em alerta');
+  });
+});
+
+describe('respond — regressões: metas e relatório', () => {
+  it('meta com o nome de uma existente: avisa e propõe outro nome', () => {
+    const r = reply('criar meta viagem de 10 mil até dezembro de 2027');
+    expect(r.text).toContain('Você já tem a meta ✈️ “Viagem”: R$ 3.000,00 de R$ 10.000,00 (30%).');
+    expect(action(r, 'create_goal').draft.name).toBe('Viagem 2');
+  });
+
+  it('sem renda registrada nos meses anteriores, não diz que "os gastos consomem toda a renda"', () => {
+    const base = makeData();
+    const data = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 100000 })],
+      transactions: [tx({ accountId: 'cc', amount: 1500, date: '2026-09-30', categoryId: CATEGORY_IDS.mercado })],
+      settings: { ...base.settings, monthlyIncomeEstimate: 400000 },
+    });
+    const r = reply('criar meta viagem de 6 mil em 12 meses', data);
+    expect(r.text).toContain('da sua renda média');
+    expect(r.text).not.toContain('consomem toda a renda');
+  });
+
+  it('relatório de mês futuro não é escrito como fechamento', () => {
+    const data = makeScenario({
+      transactions: [...baseTransactions(), tx({ amount: 35990, date: '2026-11-12', status: 'pendente', description: 'TV (2/10)', categoryId: CATEGORY_IDS.compras })],
+    });
+    const r = reply('relatório do mês que vem', data);
+    expect(r.text).toContain('Novembro de 2026 ainda não começou.');
+    expect(r.text).not.toContain('voltar ao azul');
+    expect(r.text).not.toContain('a mais do que ganhou');
+  });
+});
+
+describe('respond — sem meta de poupança (0% nas Configurações)', () => {
+  const noGoal = () => makeScenario({ settings: { ...makeScenario().settings, savingsRateTarget: 0 } });
+
+  it('resumo do mês informa a taxa sem dizer "sua meta é 20%"', () => {
+    const r = reply('resumo do mês', noGoal());
+    expect(r.text).toContain('67,4% da renda');
+    expect(r.text).not.toMatch(/meta/);
+  });
+
+  it('"quanto posso gastar?" não reserva 20% para uma meta que não existe', () => {
+    const r = reply('quanto posso gastar hoje?', noGoal());
+    // 6.000 − 2.455,90 = 3.544,10 em 17 dias
+    expect(r.text).toContain('Como você não definiu uma meta de poupança, você ainda pode gastar **R$ 3.544,10**');
+    expect(r.text).not.toMatch(/20%/);
+    expect(card(r, 'list').items.map((i) => i.label)).not.toContain('Meta de poupança (20%)');
   });
 });

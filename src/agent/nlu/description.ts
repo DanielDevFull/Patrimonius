@@ -1,7 +1,10 @@
 /**
  * Descrição limpa para lançamentos: remove verbo, valor, data, parcelas, conta e preposições nas pontas.
  */
-import { overlapsAny, tokenize, type Span, type Token } from './text';
+import { fuzzyScore, overlapsAny, tokenize, type Span, type Token } from './text';
+
+/** Tamanho máximo da descrição (cortada em limite de palavra). */
+const MAX_DESCRIPTION = 60;
 
 const VERB_WORDS = new Set([
   'gastei',
@@ -86,7 +89,22 @@ const VERB_WORDS = new Set([
   'se',
   'ainda',
   'eu',
+  'recebo',
+  'gastando',
+  'comprando',
+  'pagando',
+  'torrando',
+  'viajar',
 ]);
+/** Verbos de lançamento cujos erros de digitação também saem da descrição ("gastie" => removido). */
+const TYPO_VERBS = ['gastei', 'paguei', 'comprei', 'recebi', 'ganhei', 'transferi', 'gastamos', 'pagamos', 'compramos'];
+/** Hora ("14h", "14h30"): não é descrição. */
+const HOUR = /^\d{1,2}h(?:\d{2})?$/;
+
+function isVerbOrTypo(w: string): boolean {
+  if (VERB_WORDS.has(w)) return true;
+  return w.length >= 5 && TYPO_VERBS.some((v) => Math.abs(v.length - w.length) <= 1 && fuzzyScore(w, v) >= 0.8);
+}
 /** Verbos que viram a descrição quando nada mais sobra ("almocei 35" => "Almoço"). */
 export const VERB_NOUN: Record<string, string> = {
   almocei: 'Almoço',
@@ -94,6 +112,7 @@ export const VERB_NOUN: Record<string, string> = {
   lanchei: 'Lanche',
   abasteci: 'Combustível',
   doei: 'Doação',
+  viajar: 'Viagem',
 };
 const EDGE_STOP = new Set([
   'no',
@@ -155,16 +174,21 @@ export function buildDescription(
   masks: Span[],
 ): { text: string | undefined; tokens: Token[] } {
   const toks = tokenize(t).filter(
-    (tk) => !overlapsAny(tk, masks) && !VERB_WORDS.has(tk.text) && /[a-z]/.test(tk.text),
+    (tk) => !overlapsAny(tk, masks) && !isVerbOrTypo(tk.text) && !HOUR.test(tk.text) && /[a-z]/.test(tk.text),
   );
   let a = 0;
   let b = toks.length - 1;
   while (a <= b && EDGE_STOP.has(toks[a].text)) a++;
   while (b >= a && EDGE_STOP.has(toks[b].text)) b--;
   const kept = toks.slice(a, b + 1);
-  const text = kept
+  let text = kept
     .map((tk) => raw.slice(tk.start, tk.end))
     .join(' ')
     .trim();
+  if (text.length > MAX_DESCRIPTION) {
+    const cut = text.slice(0, MAX_DESCRIPTION + 1);
+    const space = cut.lastIndexOf(' ');
+    text = (space > 0 ? cut.slice(0, space) : cut.slice(0, MAX_DESCRIPTION)).trim();
+  }
   return { text: text || undefined, tokens: kept };
 }

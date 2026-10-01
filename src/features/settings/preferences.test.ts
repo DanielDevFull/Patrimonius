@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildDefaultCategories, CATEGORY_IDS } from '@/domain/defaults';
+import { matchCategory } from '@/agent/nlu';
+import { SYSTEM_CATEGORY_IDS as REPO_SYSTEM_CATEGORY_IDS } from '@/db/repo';
+import { buildDefaultCategories, CATEGORY_IDS, SYSTEM_CATEGORY_IDS } from '@/domain/defaults';
 import type { Category } from '@/domain/types';
 import { TEST_NOW } from '@/test/factories';
 import {
@@ -36,9 +38,25 @@ describe('parseIntInRange', () => {
 });
 
 describe('parseKeywords', () => {
-  it('normaliza (minúsculas, sem acento), remove vazios e duplicados mantendo a ordem', () => {
-    expect(parseKeywords('Padaria, CAFÉ;  pão de  açúcar ,, padaria\nCafe')).toEqual(['padaria', 'cafe', 'pao de acucar']);
+  it('minúsculas com acento, sem espaços extras, sem vazios e sem duplicados (ignorando acento), na ordem', () => {
+    expect(parseKeywords('Padaria, CAFÉ;  pão de  açúcar ,, padaria\nCafe')).toEqual(['padaria', 'café', 'pão de açúcar']);
     expect(parseKeywords('   ')).toEqual([]);
+  });
+
+  it('mantém a grafia digitada: o que é salvo é o que aparece na lista de categorias', () => {
+    expect(parseKeywords('Condomínio, IPTU, condominio')).toEqual(['condomínio', 'iptu']);
+  });
+
+  it('palavras-chave com acento continuam casando com o texto digitado com ou sem acento', () => {
+    const custom: Category[] = [
+      ...categories,
+      { ...cat(CATEGORY_IDS.lazer), id: 'cat-bebe', name: 'Bebê', keywords: parseKeywords('Fraldão, Pediatra') },
+    ];
+    expect(matchCategory('comprei um fraldao', custom, 'despesa')?.categoryId).toBe('cat-bebe');
+    expect(matchCategory('fraldão', custom, 'despesa')?.categoryId).toBe('cat-bebe');
+    // Padrões com acento: "farmacia" (sem acento) segue indo para Saúde.
+    expect(matchCategory('farmacia', categories, 'despesa')?.categoryId).toBe(CATEGORY_IDS.saude);
+    expect(matchCategory('condominio', categories, 'despesa')?.categoryId).toBe(CATEGORY_IDS.moradia);
   });
 });
 
@@ -72,6 +90,11 @@ describe('defaultReplacement', () => {
   it('as categorias usadas pelo app são protegidas', () => {
     expect(PROTECTED_CATEGORY_IDS.has(CATEGORY_IDS.dividas)).toBe(true);
     expect(PROTECTED_CATEGORY_IDS.has(CATEGORY_IDS.lazer)).toBe(false);
+  });
+
+  it('a tela protege exatamente as categorias que o repositório se recusa a excluir (mesma fonte)', () => {
+    expect([...PROTECTED_CATEGORY_IDS].sort()).toEqual([...SYSTEM_CATEGORY_IDS].sort());
+    expect(SYSTEM_CATEGORY_IDS).toBe(REPO_SYSTEM_CATEGORY_IDS);
   });
 });
 

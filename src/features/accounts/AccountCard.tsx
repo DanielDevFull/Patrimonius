@@ -28,7 +28,7 @@ export function AccountCard({
   onRestore,
 }: AccountCardProps) {
   const isCard = account.type === 'cartao_credito';
-  const card = isCard ? cardInfo(account, balance.current, today) : null;
+  const card = isCard ? cardInfo(account, balance.current, today, balance.committed) : null;
   const projectedInvoice = Math.max(0, -balance.projected);
   const headingId = `conta-${account.id}`;
 
@@ -110,12 +110,23 @@ export function AccountCard({
                 <ProgressBar value={card.usedRatio} label={`Limite usado de ${account.name}`} />
                 <div className="flex flex-wrap justify-between gap-x-3 text-xs text-slate-500 dark:text-slate-400">
                   <span>
-                    Usado <Money value={card.invoice} /> de <Money value={card.limit} />
+                    Usado <Money value={card.used} /> de <Money value={card.limit} />
                   </span>
                   <span>
                     Disponível <Money value={card.available} colored={card.available < 0} />
                   </span>
                 </div>
+                {card.used > card.invoice && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    O limite usado inclui <Money value={card.used - card.invoice} /> em parcelas e lançamentos
+                    futuros.
+                  </p>
+                )}
+                {card.used < card.invoice && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    O limite usado já considera pagamentos e outros lançamentos pendentes ou agendados.
+                  </p>
+                )}
               </div>
             )}
             {(account.closingDay || account.dueDay) && (

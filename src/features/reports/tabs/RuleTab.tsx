@@ -78,7 +78,7 @@ export function RuleTab({ data, month, maxMonth, onMonthChange }: RuleTabProps) 
   return (
     <div className="space-y-4">
       <MonthPicker value={month} onChange={onMonthChange} max={maxMonth} />
-      <div className="grid gap-4 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
         <Card className="lg:col-span-3">
           <section aria-labelledby="rule-title">
             <CardHeader

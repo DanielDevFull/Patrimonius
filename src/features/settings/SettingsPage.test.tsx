@@ -94,7 +94,7 @@ describe('SettingsPage', () => {
 
   it('aplica tema e modo ocultar valores na hora', async () => {
     const user = await renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Escuro' }));
+    await user.click(screen.getByRole('radio', { name: 'Escuro' }));
     await waitFor(async () => expect((await settings()).theme).toBe('dark'));
     await user.click(screen.getByRole('switch'));
     await waitFor(async () => expect((await settings()).hideValues).toBe(true));
@@ -107,12 +107,19 @@ describe('SettingsPage', () => {
       expect(within(necessities).getByText('Mercado')).toBeInTheDocument();
       expect(within(screen.getByRole('region', { name: 'Desejos · 30%' })).getByText('Lazer')).toBeInTheDocument();
       expect(screen.queryByText('Salário')).not.toBeInTheDocument();
-      await user.click(screen.getByRole('tab', { name: 'Receitas' }));
+      await user.click(screen.getByRole('radio', { name: 'Receitas' }));
       expect(screen.getByText('Salário')).toBeInTheDocument();
       expect(screen.queryByText('Mercado')).not.toBeInTheDocument();
     });
 
-    it('cria categoria com palavras-chave normalizadas e impede nome duplicado', async () => {
+    it('mostra a prévia das palavras-chave padrão com acento', async () => {
+      await renderPage();
+      expect(screen.getByText(/aluguel, condomínio, iptu, reforma…/)).toBeInTheDocument();
+      expect(screen.getByText(/farmácia, remédio, médico, consulta…/)).toBeInTheDocument();
+      expect(screen.queryByText(/condominio|farmacia/)).not.toBeInTheDocument();
+    });
+
+    it('cria categoria com palavras-chave em minúsculas (com acento, sem duplicatas) e impede nome duplicado', async () => {
       const user = await renderPage();
       await user.click(screen.getByRole('button', { name: /Nova/ }));
       const modal = dialog();
@@ -124,13 +131,13 @@ describe('SettingsPage', () => {
       await user.type(modal.getByLabelText('Nome'), 'Café da manhã');
       await user.click(modal.getByRole('button', { name: 'Usar ☕' }));
       await user.selectOptions(modal.getByLabelText('Grupo (regra 50/30/20)'), 'necessidades');
-      await user.type(modal.getByLabelText('Palavras-chave'), 'Padaria, CAFÉ, padaria');
-      expect(modal.getByLabelText('Palavras-chave que serão salvas')).toHaveTextContent('padariacafe');
+      await user.type(modal.getByLabelText('Palavras-chave'), 'Padaria, CAFÉ, padaria, cafe');
+      expect(modal.getByLabelText('Palavras-chave que serão salvas')).toHaveTextContent('padariacafé');
       await user.click(modal.getByRole('button', { name: 'Salvar' }));
 
       expect(await screen.findByText('Categoria criada.')).toBeInTheDocument();
       const created = (await db.categories.toArray()).find((c) => c.name === 'Café da manhã');
-      expect(created).toMatchObject({ kind: 'despesa', icon: '☕', group: 'necessidades', keywords: ['padaria', 'cafe'], archived: false });
+      expect(created).toMatchObject({ kind: 'despesa', icon: '☕', group: 'necessidades', keywords: ['padaria', 'café'], archived: false });
     });
 
     it('edita categoria existente sem permitir trocar o tipo', async () => {

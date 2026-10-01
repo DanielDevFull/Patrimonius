@@ -16,7 +16,16 @@ import {
   useToast,
 } from '@/components/ui';
 import { db } from '@/db/db';
-import { addRecurring, runRecurring, updateRecurring, updateTransaction } from '@/db/repo';
+import {
+  addRecurring,
+  deleteRecurringPendingAfter,
+  listRecurringTransactions,
+  rescheduleRecurring,
+  runRecurring,
+  updateRecurring,
+  updateTransaction,
+} from '@/db/repo';
+import { formatDateBR, isISODate, monthKey, parseISO, plausibleDateRange, startOfMonth } from '@/domain/dates';
 import {
   FREQUENCY_LABELS,
   type Cents,
@@ -34,8 +43,11 @@ import {
 } from '@/features/transactions/form-utils';
 import {
   monthlyEquivalent,
+  pastOccurrences,
   recomputeNextDate,
+  rescheduleNextDate,
   resumeNextDate,
+  skipToCurrentMonth,
   validateRecurringForm,
   type RecurringFormField,
 } from './recurring-utils';
@@ -96,6 +108,8 @@ export function RecurringFormModal({ rule, initial, data, today, onClose }: Recu
   const [autoGenerate, setAutoGenerate] = useState(seed.autoGenerate ?? true);
   const [active, setActive] = useState(rule?.active ?? true);
   const [applyToPending, setApplyToPending] = useState(true);
+  /** Nova regra com início antes do mês corrente: gerar também as ocorrências antigas (padrão: não). */
+  const [generatePast, setGeneratePast] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -126,10 +140,19 @@ export function RecurringFormModal({ rule, initial, data, today, onClose }: Recu
     [data.categories, type, rule],
   );
 
-  const errors = validateRecurringForm({ amount, categoryId, accountId, startDate, endDate });
+  const errors = validateRecurringForm({ amount, categoryId, accountId, startDate, endDate, today });
+  const dateRange = plausibleDateRange(today);
   const show = (f: RecurringFormField) => (submitted ? errors[f] : undefined);
   const monthly =
     amount && amount > 0 && frequency !== 'mensal' ? monthlyEquivalent(amount, frequency) : null;
+  // Só na criação: ocorrências de meses anteriores que virariam pendentes vencidos.
+  const past = useMemo(
+    () =>
+      !rule && autoGenerate
+        ? pastOccurrences(startDate, frequency, isISODate(endDate) ? endDate : null, today)
+        : [],
+    [rule, autoGenerate, startDate, frequency, endDate, today],
+  );
 
   function changeType(next: 'despesa' | 'receita') {
     setType(next);
@@ -171,18 +194,40 @@ export function RecurringFormModal({ rule, initial, data, today, onClose }: Recu
     };
     try {
       if (rule) {
-        let nextDate = rule.nextDate;
-        if (startDate !== rule.startDate || frequency !== rule.frequency) {
-          const last = generated.reduce<ISODate | null>(
-            (max, t) => (max === null || t.date > max ? t.date : max),
-            null,
+        const scheduleChanged = startDate !== rule.startDate || frequency !== rule.frequency;
+        let replaced = 0;
+        if (scheduleChanged && active && autoGenerate) {
+          // Nova agenda: os pendentes do mês corrente em diante são refeitos (sem duplicar o mês) pelo runRecurring.
+          replaced = await rescheduleRecurring(
+            rule.id,
+            { ...base, active },
+            startOfMonth(monthKey(today)),
+            (last) => rescheduleNextDate(startDate, frequency, last, today),
           );
-          nextDate = recomputeNextDate(startDate, frequency, last);
+        } else {
+          let nextDate = rule.nextDate;
+          if (scheduleChanged) {
+            const last = generated.reduce<ISODate | null>(
+              (max, t) => (max === null || t.date > max ? t.date : max),
+              null,
+            );
+            nextDate = recomputeNextDate(startDate, frequency, last);
+          }
+          // Reativar ou ligar a geração automática não gera de uma vez as ocorrências dos meses anteriores.
+          if (active && (!rule.active || (autoGenerate && !rule.autoGenerate))) {
+            nextDate = resumeNextDate({ ...rule, ...base, nextDate }, today);
+          }
+          await updateRecurring(rule.id, { ...base, active, nextDate });
         }
-        if (active && !rule.active) nextDate = resumeNextDate({ ...rule, ...base, nextDate }, today);
-        await updateRecurring(rule.id, { ...base, active, nextDate });
+        // Término definido (ou antecipado): os pendentes já gerados depois dele deixam de valer.
+        const removedAfterEnd =
+          base.endDate !== null && (rule.endDate === null || base.endDate < rule.endDate)
+            ? await deleteRecurringPendingAfter(rule.id, base.endDate)
+            : 0;
+        let updated = 0;
         if (applyToPending && pendingGenerated.length) {
-          for (const t of pendingGenerated) {
+          const remaining = (await listRecurringTransactions(rule.id)).filter((t) => t.status === 'pendente');
+          for (const t of remaining) {
             await updateTransaction(t.id, {
               type,
               amount,
@@ -191,15 +236,38 @@ export function RecurringFormModal({ rule, initial, data, today, onClose }: Recu
               accountId,
             });
           }
+          updated = remaining.length;
         }
         await runRecurring();
-        toast(
-          applyToPending && pendingGenerated.length
-            ? `Recorrência atualizada (e ${pendingGenerated.length === 1 ? '1 lançamento pendente' : `${pendingGenerated.length} lançamentos pendentes`}).`
+        const messages = [
+          updated > 0
+            ? `Recorrência atualizada (e ${updated === 1 ? '1 lançamento pendente' : `${updated} lançamentos pendentes`}).`
             : 'Recorrência atualizada.',
-        );
+        ];
+        if (replaced > 0) {
+          messages.push(
+            replaced === 1
+              ? 'O lançamento pendente da agenda antiga foi substituído pela nova data.'
+              : `${replaced} lançamentos pendentes da agenda antiga foram substituídos pelas novas datas.`,
+          );
+        }
+        if (removedAfterEnd > 0) {
+          messages.push(
+            removedAfterEnd === 1
+              ? '1 lançamento pendente depois do término foi excluído.'
+              : `${removedAfterEnd} lançamentos pendentes depois do término foram excluídos.`,
+          );
+        }
+        toast(messages.join(' '));
       } else {
-        const created = await addRecurring({ ...base, active: true });
+        // Início no passado: por padrão a agenda começa no mês corrente (o início continua sendo a âncora); as
+        // ocorrências antigas só viram pendentes se o usuário pedir.
+        const skipPast = startDate < startOfMonth(monthKey(today)) && !(autoGenerate && generatePast);
+        const created = await addRecurring({
+          ...base,
+          active: true,
+          nextDate: skipPast ? skipToCurrentMonth(startDate, frequency, parseISO(startDate).day, today) : undefined,
+        });
         await runRecurring();
         const count = await db.transactions.where('recurringId').equals(created.id).count();
         toast(
@@ -233,6 +301,7 @@ export function RecurringFormModal({ rule, initial, data, today, onClose }: Recu
     >
       <form id={ids.form} onSubmit={onSubmit} noValidate className="space-y-4">
         <SegmentedControl
+          mode="radio"
           aria-label="Tipo de recorrência"
           options={TYPE_OPTIONS}
           value={type}
@@ -369,6 +438,8 @@ export function RecurringFormModal({ rule, initial, data, today, onClose }: Recu
               id={ids.start}
               type="date"
               value={startDate}
+              min={dateRange.min}
+              max={dateRange.max}
               onChange={(e) => setStartDate(e.target.value)}
             />
           </Field>
@@ -382,7 +453,8 @@ export function RecurringFormModal({ rule, initial, data, today, onClose }: Recu
               id={ids.end}
               type="date"
               value={endDate}
-              min={startDate || undefined}
+              min={startDate || dateRange.min}
+              max={dateRange.max}
               onChange={(e) => setEndDate(e.target.value)}
             />
           </Field>
@@ -394,6 +466,22 @@ export function RecurringFormModal({ rule, initial, data, today, onClose }: Recu
           label="Gerar lançamentos automaticamente"
           description="Cria os lançamentos como pendentes até o fim do mês; você só confirma quando pagar ou receber."
         />
+        {past.length > 0 && (
+          <Switch
+            checked={generatePast}
+            onChange={setGeneratePast}
+            label={
+              past.length === 1
+                ? `Gerar também a ocorrência de ${formatDateBR(past[0])}`
+                : `Gerar também as ${past.length} ocorrências anteriores a este mês`
+            }
+            description={
+              past.length === 1
+                ? 'O início é anterior a este mês. Ligado, ela entra como pendente vencida; deixe desligado se já foi paga ou lançada.'
+                : `O início é anterior a este mês (${formatDateBR(past[0])} a ${formatDateBR(past[past.length - 1])}). Ligado, elas entram como pendentes vencidas; deixe desligado se já foram pagas ou lançadas.`
+            }
+          />
+        )}
         {rule && (
           <Switch
             checked={active}

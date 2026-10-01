@@ -3,7 +3,7 @@
  */
 import { normalizeText } from '@/domain/text';
 import type { Category, CategoryKind, ID } from '@/domain/types';
-import { CATEGORY_IDS } from '@/domain/defaults';
+import { CATEGORY_IDS, SYSTEM_CATEGORY_IDS } from '@/domain/defaults';
 
 export const APP_VERSION = '0.1.0';
 
@@ -37,26 +37,25 @@ export function savingsRateError(text: string): string | null {
 
 /**
  * Categorias que o app usa diretamente (destino padrão ao excluir, aportes em metas e pagamentos de dívidas).
- * Podem ser arquivadas, mas não excluídas.
+ * Podem ser arquivadas, mas não excluídas. Derivado de SYSTEM_CATEGORY_IDS — a mesma lista que o repositório
+ * usa para recusar a exclusão.
  */
-export const PROTECTED_CATEGORY_IDS: ReadonlySet<ID> = new Set<ID>([
-  CATEGORY_IDS.outrosDespesa,
-  CATEGORY_IDS.outrosReceita,
-  CATEGORY_IDS.investimentos,
-  CATEGORY_IDS.dividas,
-]);
+export const PROTECTED_CATEGORY_IDS: ReadonlySet<ID> = new Set<ID>(SYSTEM_CATEGORY_IDS);
 
 /**
- * Converte o texto digitado ("Padaria, Café;  pão de açúcar") em palavras-chave normalizadas
- * (minúsculas, sem acento, sem duplicatas, na ordem digitada).
+ * Converte o texto digitado ("Padaria, Café;  pão de açúcar") em palavras-chave em minúsculas, COM os acentos
+ * digitados (elas são exibidas nas Configurações), sem espaços extras e sem duplicatas na ordem digitada.
+ * Duplicatas são detectadas sem acento ("Café" e "cafe" são a mesma palavra; vale a primeira grafia):
+ * a NLU e o categorizador comparam as palavras-chave já sem acento.
  */
 export function parseKeywords(text: string): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const part of text.split(/[,;\n]/)) {
-    const k = normalizeText(part);
-    if (!k || seen.has(k)) continue;
-    seen.add(k);
+    const k = part.replace(/\s+/g, ' ').trim().toLocaleLowerCase('pt-BR');
+    const key = normalizeText(k);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
     result.push(k);
   }
   return result;

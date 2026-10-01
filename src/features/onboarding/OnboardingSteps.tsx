@@ -329,7 +329,7 @@ export function GoalsStep(p: GoalsStepProps) {
               className="pr-16"
               onChange={(e) => p.onMonths(e.target.value)}
             />
-            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-500">
+            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-500 dark:text-slate-400">
               meses
             </span>
           </div>
@@ -341,7 +341,7 @@ export function GoalsStep(p: GoalsStepProps) {
           label="Meta de poupança"
           htmlFor={p.ids.rate}
           error={p.rateError}
-          hint="Parte da renda que você quer guardar todo mês. A regra 50/30/20 sugere 20%."
+          hint="Parte da renda que você quer guardar todo mês. A regra 50/30/20 sugere 20%. Use 0 para não ter meta."
         >
           <div className="relative max-w-40">
             <Input
@@ -355,7 +355,7 @@ export function GoalsStep(p: GoalsStepProps) {
               className="pr-10"
               onChange={(e) => p.onRate(e.target.value)}
             />
-            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-500">
+            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-slate-500 dark:text-slate-400">
               %
             </span>
           </div>
@@ -397,7 +397,7 @@ export function DoneStep({ agentName, name, income, accounts, months, rate }: Do
       value: accounts.length ? accounts.map((a) => a.name.trim()).join(', ') : 'nenhuma por enquanto',
     },
     { label: 'Reserva de emergência', value: months !== null ? `${months} ${months === 1 ? 'mês' : 'meses'}` : '—' },
-    { label: 'Meta de poupança', value: rate !== null ? `${rate}% da renda` : '—' },
+    { label: 'Meta de poupança', value: rate === null ? '—' : rate === 0 ? 'sem meta' : `${rate}% da renda` },
   ];
   return (
     <div className="space-y-5">

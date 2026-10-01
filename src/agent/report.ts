@@ -6,6 +6,7 @@ import {
   groupBreakdown,
   monthSummary,
   monthlySeries,
+  savingsTargetPct,
   suggestBudgets,
   topExpenses,
   type CategoryTotal,
@@ -52,16 +53,26 @@ export function monthlyReport(data: FinanceData, month: MonthKey, today: ISODate
   const current = monthKey(today);
   const s = monthSummary(data.transactions, month);
 
+  // Mês futuro nunca vira "fechamento" (mesmo com parcelas já agendadas): no máximo lista o que está previsto.
+  if (month > current) {
+    const paragraphs = [
+      `${capitalize(long)} ainda não começou. Quando o mês chegar, registre suas receitas e despesas e eu escrevo o fechamento.`,
+    ];
+    if (s.transactionCount > 0)
+      paragraphs.push(
+        sentences([
+          `Já estão agendados para ${long} ${formatBRL(s.expense)} em despesas${s.income > 0 ? ` e ${formatBRL(s.income)} em receitas` : ''} (parcelas e contas futuras).`,
+          'Para ver como o caixa deve ficar, pergunte “vou fechar o mês no azul?”.',
+        ]),
+      );
+    return { month, title, paragraphs, cards: [] };
+  }
+
   if (s.transactionCount === 0) {
-    const paragraphs =
-      month > current
-        ? [
-            `${capitalize(long)} ainda não começou. Quando o mês chegar, registre suas receitas e despesas e eu escrevo o fechamento.`,
-          ]
-        : [
-            `Não há lançamentos em ${long}. Registre suas receitas e despesas ao longo do mês — no app ou aqui no chat, como “gastei 50 no mercado” — e eu monto o fechamento com análises e recomendações.`,
-            'Dica: comece pelos gastos fixos (aluguel, contas, assinaturas) e pelo salário. Só isso já mostra quanto sobra por mês.',
-          ];
+    const paragraphs = [
+      `Não há lançamentos em ${long}. Registre suas receitas e despesas ao longo do mês — no app ou aqui no chat, como “gastei 50 no mercado” — e eu monto o fechamento com análises e recomendações.`,
+      'Dica: comece pelos gastos fixos (aluguel, contas, assinaturas) e pelo salário. Só isso já mostra quanto sobra por mês.',
+    ];
     return { month, title, paragraphs, cards: [] };
   }
 
@@ -70,8 +81,9 @@ export function monthlyReport(data: FinanceData, month: MonthKey, today: ISODate
   const prevLong = formatMonthLong(prevMonth);
   const nextLong = formatMonthLong(addMonthsToKey(month, 1));
   const prev = monthSummary(data.transactions, prevMonth);
-  const targetPct = data.settings.savingsRateTarget > 0 ? data.settings.savingsRateTarget : 20;
-  const target = targetPct / 100;
+  // Sem meta de poupança (0% nas Configurações): a taxa é informada sem comparação e não vira recomendação.
+  const targetPct = savingsTargetPct(data.settings);
+  const goal = targetPct === null ? null : { pct: targetPct, ratio: targetPct / 100 };
   const asOf = partial ? today : endOfMonth(month) < today ? endOfMonth(month) : today;
   const paragraphs: string[] = [];
 
@@ -80,18 +92,34 @@ export function monthlyReport(data: FinanceData, month: MonthKey, today: ISODate
 
   // 1) Receitas, despesas, sobra e taxa de poupança.
   const saved = s.net + s.invested;
+  // Fechamento parcial com pendentes: "entraram/saíram" só com o que já aconteceu; o resto é previsto.
+  const partialPending = partial && (s.pendingIncome > 0 || s.pendingExpense > 0);
   let rateSentence: string | null = null;
   if (s.savingsRate !== null) {
     const investedNote = s.invested > 0 ? ` (contando ${formatBRL(s.invested)} investidos)` : '';
+    // Mês em andamento: a taxa inclui receitas/despesas previstas, então é uma previsão.
+    const rateLabel = partialPending ? 'A taxa de poupança prevista para o mês é' : 'Sua taxa de poupança foi';
     rateSentence =
-      s.savingsRate >= target
-        ? `Sua taxa de poupança foi de ${formatPercent(s.savingsRate)}${investedNote}, acima da meta de ${formatNumber(targetPct)}%. 👏`
-        : `Sua taxa de poupança foi de ${formatPercent(s.savingsRate)}${investedNote}, abaixo da meta de ${formatNumber(targetPct)}%.`;
+      goal === null
+        ? `${rateLabel} de ${formatPercent(s.savingsRate)}${investedNote}.`
+        : s.savingsRate >= goal.ratio
+          ? `${rateLabel} de ${formatPercent(s.savingsRate)}${investedNote}, acima da meta de ${formatNumber(goal.pct)}%. 👏`
+          : `${rateLabel} de ${formatPercent(s.savingsRate)}${investedNote}, abaixo da meta de ${formatNumber(goal.pct)}%.`;
   }
   paragraphs.push(
     sentences([
-      `Em ${long} entraram ${formatBRL(s.income)} e saíram ${formatBRL(s.expense)}.`,
-      s.net >= 0 ? `Sobraram ${formatBRL(s.net)}.` : `Você gastou ${formatBRL(-s.net)} a mais do que ganhou.`,
+      partialPending
+        ? `Até agora, em ${long}, entraram ${formatBRL(s.paidIncome)} e saíram ${formatBRL(s.paidExpense)}; contando os lançamentos previstos, o mês soma ${formatBRL(s.income)} em receitas e ${formatBRL(s.expense)} em despesas.`
+        : `Em ${long} entraram ${formatBRL(s.income)} e saíram ${formatBRL(s.expense)}.`,
+      s.net >= 0
+        ? partialPending
+          ? `A previsão é sobrarem ${formatBRL(s.net)}.`
+          : `Sobraram ${formatBRL(s.net)}.`
+        : partialPending && saved < 0
+          ? `Pela previsão, as despesas passam as receitas em ${formatBRL(-s.net)}.`
+          : saved >= 0
+            ? `Seus aportes em investimentos (${formatBRL(s.invested)}) passaram a sobra do mês em ${formatBRL(-s.net)} — a diferença saiu do saldo que você já tinha.`
+            : `Você gastou ${formatBRL(-s.net)} a mais do que ganhou.`,
       rateSentence ??
         'Não houve receitas registradas no mês, então não dá para calcular a taxa de poupança.',
       s.pendingExpense > 0 || s.pendingIncome > 0
@@ -204,13 +232,14 @@ export function monthlyReport(data: FinanceData, month: MonthKey, today: ISODate
   // 6) Recomendação para o próximo mês.
   const topWant = rows.find((r) => r.categoryId !== null && data.categories.find((c) => c.id === r.categoryId)?.group === 'desejos');
   let recommendation: string;
-  if (s.net < 0) {
+  // Aportes em Investimentos e reserva são poupança: só é "vermelho" quando faltou dinheiro mesmo sem eles.
+  if (saved < 0) {
     recommendation = `o foco é voltar ao azul. ${topWant ? `Defina um teto para ${categoryLabel(topWant)} e acompanhe o orçamento toda semana.` : 'Defina orçamentos para as categorias que mais pesam e acompanhe toda semana.'}`;
   } else if (over.length) {
     recommendation = `ajuste o orçamento de ${over[0].categoryName} para um valor realista ou corte gastos nessa categoria.`;
-  } else if (s.income > 0 && saved < s.income * target) {
-    const missing = Math.ceil(s.income * target - saved);
-    recommendation = `separe ${formatBRL(missing)} a mais logo que o salário cair para chegar à meta de ${formatNumber(targetPct)}% de poupança.`;
+  } else if (goal !== null && s.income > 0 && saved < s.income * goal.ratio) {
+    const missing = Math.ceil(s.income * goal.ratio - saved);
+    recommendation = `separe ${formatBRL(missing)} a mais logo que o salário cair para chegar à meta de ${formatNumber(goal.pct)}% de poupança.`;
   } else if (topWant && topWant.share >= 0.1) {
     const cut = Math.round(topWant.total * 0.15);
     recommendation = `tente reduzir ${categoryLabel(topWant)} em 15% — são ${formatBRL(cut)} a mais no bolso.`;

@@ -7,12 +7,14 @@ import { CATEGORY_IDS } from '@/domain/defaults';
 import type { FinanceData } from '@/domain/types';
 import {
   makeAccount,
+  makeAsset,
   makeBudget,
   makeContribution,
   makeData,
   makeDebt,
   makeGoal,
   makeRecurring,
+  makeValuation,
 } from '@/test/factories';
 import { generateInsights } from './insights';
 import { ACC, MONTH, TODAY, baseTransactions, deepFreeze, makeScenario, tx } from './responder/test-fixtures';
@@ -316,7 +318,8 @@ describe('generateInsights — dívidas, cartão, metas e patrimônio', () => {
 
   it('metas: atrasada e vencida (atenção); concluída e ≥ 90% (positivo)', () => {
     const goals = [
-      makeGoal({ id: 'g-atrasada', name: 'Carro', targetAmount: 1200000, targetDate: '2027-03-31' }),
+      // Criada em julho e sem aportes desde então (uma meta criada neste mês ainda não está atrasada).
+      makeGoal({ id: 'g-atrasada', name: 'Carro', targetAmount: 1200000, targetDate: '2027-03-31', createdAt: '2026-07-01T12:00:00.000Z' }),
       makeGoal({ id: 'g-vencida', name: 'Curso', targetAmount: 300000, targetDate: '2026-09-30' }),
       makeGoal({ id: 'g-feita', name: 'Celular', targetAmount: 100000, targetDate: null }),
       makeGoal({ id: 'g-quase', name: 'Bicicleta', targetAmount: 100000, targetDate: null }),
@@ -331,10 +334,19 @@ describe('generateInsights — dívidas, cartão, metas e patrimônio', () => {
     });
     const late = find(list, 'meta-atrasada:g-atrasada')!;
     expect(late.severity).toBe('atencao');
-    expect(late.message).toContain('R$ 2.400,00 por mês');
+    expect(late.message).toContain('R$ 2.000,00 por mês'); // 12.000 em 6 meses de aporte (out a mar)
     expect(find(list, 'meta-vencida:g-vencida')?.message).toContain('faltam R$ 2.500,00');
     expect(find(list, 'meta-concluida:g-feita')?.severity).toBe('positivo');
     expect(find(list, 'meta-quase:g-quase')?.message).toContain('95%');
+  });
+
+  it('meta recém-criada (neste mês, sem aportes) não gera alerta de atraso', () => {
+    const list = insightsFor({
+      goals: [makeGoal({ id: 'g-nova', name: 'Carro', targetAmount: 3000000, targetDate: '2030-04-30', createdAt: `${TODAY}T12:00:00.000Z` })],
+      goalContributions: [],
+    });
+    // Antes: "Meta Carro atrasada — aporte ... por mês — sua média recente é R$ 0,00".
+    expect(find(list, 'meta-atrasada:g-nova')).toBeUndefined();
   });
 
   it('meta concluída há muito tempo não vira conquista de novo', () => {
@@ -343,6 +355,44 @@ describe('generateInsights — dívidas, cartão, metas e patrimônio', () => {
       goalContributions: [makeContribution({ goalId: 'g-antiga', amount: 100000, date: '2026-05-05' })],
     });
     expect(find(list, 'meta-concluida')).toBeUndefined();
+  });
+
+  it('venda de um bem arquivado não vira "patrimônio em alta" (nem é atribuída a poupar)', () => {
+    // Carro avaliado em maio, vendido em 20/09 por R$ 50.000,00 (receita) e arquivado nessa data.
+    const data = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 100000 })],
+      transactions: [
+        tx({ accountId: 'cc', type: 'receita', amount: 5000000, date: '2026-09-20', categoryId: CATEGORY_IDS.outrosReceita }),
+      ],
+      assets: [makeAsset({ id: 'car', value: 5000000, archived: true, archivedAt: '2026-09-20' })],
+      assetValuations: [makeValuation({ assetId: 'car', value: 5000000, date: '2026-05-01' })],
+    });
+    // Antes: "cresceu R$ 50.000,00 em setembro ... É o resultado de poupar e reduzir dívidas".
+    expect(find(generateInsights(data, '2026-10-05'), 'patrimonio-cresceu')).toBeUndefined();
+  });
+
+  it('patrimônio em alta tem texto neutro (não atribui a alta a poupar e reduzir dívidas)', () => {
+    const data = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 100000 })],
+      transactions: [tx({ accountId: 'cc', type: 'receita', amount: 500000, date: '2026-09-05', categoryId: CATEGORY_IDS.salario })],
+    });
+    const growth = find(generateInsights(data, '2026-10-05'), 'patrimonio-cresceu');
+    expect(growth?.message).toContain('cresceu R$ 5.000,00 em setembro de 2026');
+    expect(growth?.message).not.toContain('poupar e reduzir dívidas');
+  });
+
+  it('compras do dia 1º não viram alerta de "ritmo acima do orçamento"', () => {
+    const data = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 500000 })],
+      budgets: [makeBudget({ categoryId: CATEGORY_IDS.mercado, amount: 60000 })],
+      transactions: [
+        tx({ accountId: 'cc', amount: 9730, date: '2026-10-01', categoryId: CATEGORY_IDS.mercado }),
+        tx({ accountId: 'cc', amount: 9730, date: '2026-10-01', categoryId: CATEGORY_IDS.mercado }),
+        tx({ accountId: 'cc', amount: 5000, date: '2026-10-01', categoryId: CATEGORY_IDS.mercado }),
+      ],
+    });
+    // Antes: "Mercado: ritmo acima do orçamento — ... deve fechar o mês em R$ 7.582,60".
+    expect(find(generateInsights(data, '2026-10-01'), 'orcamento-alerta')).toBeUndefined();
   });
 
   it('patrimônio que cai não gera conquista', () => {
@@ -456,8 +506,8 @@ describe('generateInsights — filtros, limite e determinismo', () => {
         ],
         debts: [makeDebt({ type: 'cartao', interestRate: 14, balance: 200000 })],
         goals: [
-          makeGoal({ id: 'g1', name: 'Carro', targetAmount: 5000000, targetDate: '2027-01-31' }),
-          makeGoal({ id: 'g2', name: 'Casa', targetAmount: 9000000, targetDate: '2027-02-28' }),
+          makeGoal({ id: 'g1', name: 'Carro', targetAmount: 5000000, targetDate: '2027-01-31', createdAt: '2026-06-01T12:00:00.000Z' }),
+          makeGoal({ id: 'g2', name: 'Casa', targetAmount: 9000000, targetDate: '2027-02-28', createdAt: '2026-06-01T12:00:00.000Z' }),
         ],
         transactions: [
           ...baseTransactions(),
@@ -479,5 +529,107 @@ describe('generateInsights — filtros, limite e determinismo', () => {
     const b = generateInsights(data, TODAY);
     expect(a).toEqual(b);
     expect(a.length).toBeGreaterThan(0);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Regressões da revisão do agente                                    */
+/* ------------------------------------------------------------------ */
+
+describe('generateInsights — regressões', () => {
+  it('uso do limite do cartão: fatura em aberto + parcelas futuras; o pagamento agendado não abate', () => {
+    const list = insightsFor({
+      transactions: [
+        ...baseTransactions(),
+        tx({ type: 'transferencia', amount: 92360, date: '2026-10-20', accountId: ACC.corrente, toAccountId: ACC.cartao, status: 'pendente', categoryId: null, description: 'Pagamento da fatura' }),
+        tx({ amount: 100000, date: '2026-11-12', accountId: ACC.cartao, status: 'pendente', categoryId: CATEGORY_IDS.compras, description: 'TV (2/10)' }),
+      ],
+    });
+    // 923,60 + 1.000,00 = 1.923,60 de 5.000,00 (38,5%). Antes: 1.000,00 (20%), abaixo da própria fatura.
+    const usage = find(list, `cartao-limite:${ACC.cartao}`)!;
+    expect(usage.message).toContain('Você está usando R$ 1.923,60 de R$ 5.000,00 do limite (38,5%)');
+  });
+
+  it('no 1º dia do mês, um gasto pequeno não gera alerta de ritmo do orçamento', () => {
+    const list = generateInsights(
+      makeScenario({
+        transactions: [
+          ...baseTransactions().filter((t) => t.date < '2026-10-01'),
+          tx({ amount: 3569, date: '2026-10-01', description: 'Uber', categoryId: CATEGORY_IDS.mercado }),
+        ],
+      }),
+      '2026-10-01',
+    );
+    expect(find(list, 'orcamento-alerta')).toBeUndefined();
+  });
+
+  it('gasto fixo mensal (mesma descrição, valor parecido) não é "fora do padrão"', () => {
+    const months = ['2026-07', '2026-08', '2026-09'];
+    const small = months.flatMap((m) =>
+      ['03', '17', '24'].map((d) => tx({ amount: 9000, date: `${m}-${d}`, description: 'Farmácia', categoryId: CATEGORY_IDS.saude })),
+    );
+    const plano = months.map((m) => tx({ amount: 38900, date: `${m}-10`, description: 'Plano de saúde', categoryId: CATEGORY_IDS.saude }));
+    const list = insightsFor({
+      transactions: [
+        ...baseTransactions(),
+        ...small,
+        ...plano,
+        tx({ id: 'tx-plano-out', amount: 38900, date: '2026-10-10', description: 'Plano de saúde', categoryId: CATEGORY_IDS.saude }),
+      ],
+    });
+    expect(find(list, 'gasto-incomum:tx-plano-out')).toBeUndefined();
+  });
+
+  it('mesmo gasto não gera 4 alertas: sem "acima do normal" com orçamento estourado e 1 incomum por categoria', () => {
+    const list = insightsFor({
+      budgets: [makeBudget({ categoryId: CATEGORY_IDS.restaurantes, amount: 30000 })],
+      transactions: [
+        ...baseTransactions(),
+        tx({ id: 'tx-jantar', amount: 39000, date: '2026-10-01', description: 'Jantar de aniversário', categoryId: CATEGORY_IDS.restaurantes }),
+        tx({ id: 'tx-rodizio', amount: 34500, date: '2026-10-02', description: 'Rodízio japonês', categoryId: CATEGORY_IDS.restaurantes }),
+      ],
+    });
+    expect(find(list, `orcamento-estourado:${CATEGORY_IDS.restaurantes}`)).toBeDefined();
+    expect(find(list, `gasto-acima-media:${CATEGORY_IDS.restaurantes}`)).toBeUndefined();
+    expect(list.filter((i) => i.id.startsWith('gasto-incomum'))).toHaveLength(1);
+  });
+
+  it('reserva completa explica a diferença para a meta "Reserva de emergência"', () => {
+    const list = insightsFor({
+      goals: [makeGoal({ id: 'g-reserva', name: 'Reserva de emergência', targetAmount: 3000000 })],
+      goalContributions: [makeContribution({ goalId: 'g-reserva', amount: 1000000, date: '2026-09-01' })],
+    });
+    const reserve = find(list, 'reserva-completa')!;
+    expect(reserve.message).toContain('Sua meta “Reserva de emergência” está em 33,3%');
+  });
+});
+
+describe('generateInsights — sem meta de poupança (0% nas Configurações)', () => {
+  const noGoal = { ...makeScenario().settings, savingsRateTarget: 0 };
+
+  it('não compara a poupança com uma meta de 20% que o usuário não escolheu', () => {
+    const list = insightsFor({
+      settings: noGoal,
+      transactions: [
+        ...baseTransactions(),
+        tx({ amount: 200000, date: '2026-09-15', description: 'Notebook', categoryId: CATEGORY_IDS.compras }),
+      ],
+    });
+    expect(find(list, 'poupanca-abaixo')).toBeUndefined();
+    expect(find(list, 'poupanca-meta')).toBeUndefined();
+    expect(list.map((i) => i.message).join(' ')).not.toMatch(/meta de 20%/);
+    // Cenário saudável: também não há "meta batida" sem meta.
+    expect(find(insightsFor({ settings: noGoal }), 'poupanca-meta')).toBeUndefined();
+  });
+
+  it('o mês no vermelho continua sendo avisado', () => {
+    const list = insightsFor({
+      settings: noGoal,
+      transactions: [
+        ...baseTransactions(),
+        tx({ amount: 450000, date: '2026-09-15', description: 'Viagem', categoryId: CATEGORY_IDS.lazer }),
+      ],
+    });
+    expect(find(list, 'poupanca-abaixo')?.title).toBe('Mês passado no vermelho');
   });
 });

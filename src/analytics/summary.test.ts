@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { buildDefaultCategories } from '@/domain/defaults';
+import { buildDefaultCategories, RULE_50_30_20 } from '@/domain/defaults';
 import type { Category } from '@/domain/types';
-import { TEST_NOW, makeTransaction } from '@/test/factories';
+import { TEST_NOW, makeAccount, makeTransaction } from '@/test/factories';
 import {
   averageMonthlyExpense,
   averageMonthlyIncome,
+  averageMonthlySurplus,
+  expenseTrackingStart,
+  monthCoverage,
   categoryBreakdown,
+  categoryBreakdownInRange,
   categoryTrend,
   compareMonthsByCategory,
   groupBreakdown,
@@ -282,6 +286,52 @@ describe('averageMonthlyExpense / averageMonthlyIncome', () => {
   });
 });
 
+describe('primeiro mês parcial e sobra média', () => {
+  // Começou a usar o app em 20/09: salário de 05/09 lançado depois e R$ 100,00 de mercado por dia de 20 a 30/09.
+  const started = [makeAccount({ id: acc, createdAt: '2026-09-20T12:00:00.000Z' })];
+  const txs = [
+    makeTransaction({ accountId: acc, type: 'receita', amount: 500000, date: '2026-09-05', categoryId: 'cat-salario' }),
+    ...Array.from({ length: 11 }, (_, i) => makeTransaction({ accountId: acc, amount: 10000, date: `2026-09-${20 + i}` })),
+    // Conta fixa gerada por recorrência no mesmo mês: não é extrapolada.
+    makeTransaction({ accountId: acc, amount: 50000, date: '2026-09-25', categoryId: 'cat-moradia', recurringId: 'r' }),
+  ];
+
+  it('expenseTrackingStart: criação da conta; com lançamentos retroativos, o lançamento mais antigo', () => {
+    expect(expenseTrackingStart({ accounts: started, transactions: txs })).toBe('2026-09-20');
+    // Contas criadas depois das despesas (histórico lançado de uma vez): vale o lançamento mais antigo.
+    expect(expenseTrackingStart({ accounts: [makeAccount({ id: acc })], transactions: txs })).toBe('2026-09-05');
+    expect(expenseTrackingStart({ accounts: [], transactions: [] })).toBeUndefined();
+  });
+
+  it('monthCoverage: fração do mês registrada (primeira semana conta como mês cheio; mínimo de 7 dias)', () => {
+    expect(monthCoverage('2026-09', '2026-09-20')).toBeCloseTo(11 / 30, 10);
+    expect(monthCoverage('2026-08', '2026-09-20')).toBe(1);
+    expect(monthCoverage('2026-09', '2026-09-05')).toBe(1);
+    expect(monthCoverage('2026-09', '2026-09-30')).toBeCloseTo(7 / 30, 10);
+    expect(monthCoverage('2026-09')).toBe(1);
+  });
+
+  it('extrapola só as despesas variáveis do mês em que o registro começou (receita nunca)', () => {
+    const start = expenseTrackingStart({ accounts: started, transactions: txs });
+    // 1.100 ÷ (11/30) = 3.000 + 500 fixos = 3.500 (antes: 1.600, como se fosse um mês inteiro).
+    expect(averageMonthlyExpense(txs, '2026-10', 3, undefined, start)).toBe(350000);
+    expect(averageMonthlyExpense(txs, '2026-10', 3)).toBe(160000);
+    expect(averageMonthlyIncome(txs, '2026-10', 3)).toBe(500000);
+    expect(averageMonthlySurplus(txs, '2026-10', 3, start)).toBe(150000);
+  });
+
+  it('averageMonthlySurplus não conta aportes em Investimentos e reserva como gasto', () => {
+    const months = ['2026-07', '2026-08', '2026-09'];
+    const invested = months.flatMap((m) => [
+      makeTransaction({ accountId: acc, type: 'receita', amount: 500000, date: `${m}-05`, categoryId: 'cat-salario' }),
+      makeTransaction({ accountId: acc, amount: 300000, date: `${m}-06`, categoryId: 'cat-moradia' }),
+      makeTransaction({ accountId: acc, amount: 200000, date: `${m}-07`, categoryId: 'cat-investimentos' }),
+    ]);
+    expect(averageMonthlySurplus(invested, '2026-10', 3)).toBe(200000);
+    expect(averageMonthlyIncome(invested, '2026-10', 3) - averageMonthlyExpense(invested, '2026-10', 3)).toBe(0);
+  });
+});
+
 describe('groupBreakdown', () => {
   it('distribui despesas nos grupos 50/30/20 e calcula ideal arredondado', () => {
     const custom: Category = { ...categories[0], id: 'cat-custom', name: 'Sem grupo', group: null };
@@ -368,5 +418,62 @@ describe('compareMonthsByCategory', () => {
       ['cat-saude', 0, 5000, -5000],
     ]);
     expect(rows[0].name).toBe('Lazer');
+  });
+});
+
+describe('categoryBreakdownInRange', () => {
+  const txs = [
+    makeTransaction({ accountId: acc, amount: 30000, date: '2026-10-02', categoryId: 'cat-mercado' }),
+    makeTransaction({ accountId: acc, amount: 10000, date: '2026-10-03', categoryId: 'cat-mercado', status: 'pendente' }),
+    makeTransaction({ accountId: 'outra', amount: 50000, date: '2026-10-04', categoryId: 'cat-moradia' }),
+    makeTransaction({ accountId: acc, amount: 5000, date: '2026-10-05', categoryId: 'cat-apagada' }),
+    makeTransaction({ accountId: acc, amount: 77700, date: '2026-09-30', categoryId: 'cat-mercado' }),
+  ];
+
+  it('com os limites de um mês, é igual a categoryBreakdown', () => {
+    expect(categoryBreakdownInRange(txs, categories, '2026-10-01', '2026-10-31', 'despesa')).toEqual(
+      categoryBreakdown(txs, categories, '2026-10', 'despesa'),
+    );
+  });
+
+  it('respeita o intervalo (inclusive), a conta e o status', () => {
+    const rows = categoryBreakdownInRange(txs, categories, '2026-09-30', '2026-10-03', 'despesa', { accountId: acc });
+    expect(rows.map((r) => [r.categoryId, r.total, r.count])).toEqual([['cat-mercado', 117700, 3]]);
+    const paid = categoryBreakdownInRange(txs, categories, '2026-10-01', '2026-10-31', 'despesa', {
+      accountId: acc,
+      includePending: false,
+    });
+    expect(paid.map((r) => [r.categoryId, r.total])).toEqual([
+      ['cat-mercado', 30000],
+      [null, 5000],
+    ]);
+  });
+
+  it('mesmo desempate de categoryBreakdown (nomes iguais sem acento/caixa mantêm a ordem)', () => {
+    const custom: Category[] = [
+      { ...categories[0], id: 'c-acento', name: 'Café' },
+      { ...categories[0], id: 'c-sem', name: 'cafe' },
+    ];
+    const tie = [
+      makeTransaction({ accountId: acc, amount: 1000, date: '2026-10-02', categoryId: 'c-acento' }),
+      makeTransaction({ accountId: acc, amount: 1000, date: '2026-10-03', categoryId: 'c-sem' }),
+    ];
+    const names = (rows: { name: string }[]) => rows.map((r) => r.name);
+    expect(names(categoryBreakdownInRange(tie, custom, '2026-10-01', '2026-10-31', 'despesa', { accountId: acc }))).toEqual(
+      names(categoryBreakdown(tie, custom, '2026-10', 'despesa')),
+    );
+  });
+});
+
+describe('groupBreakdown — regra 50/30/20 de @/domain/defaults', () => {
+  it('o ideal usa RULE_50_30_20', () => {
+    const txs = [makeTransaction({ accountId: acc, type: 'receita', amount: 1000000, date: '2026-10-05', categoryId: 'cat-salario' })];
+    const g = groupBreakdown(txs, categories, '2026-10');
+    expect(g.ideal).toEqual({
+      necessidades: 1000000 * RULE_50_30_20.necessidades,
+      desejos: 1000000 * RULE_50_30_20.desejos,
+      objetivos: 1000000 * RULE_50_30_20.objetivos,
+    });
+    expect(RULE_50_30_20).toEqual({ necessidades: 0.5, desejos: 0.3, objetivos: 0.2 });
   });
 });

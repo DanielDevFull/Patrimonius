@@ -6,7 +6,6 @@ import { makeBudget, makeData, makeTransaction, TEST_NOW } from '@/test/factorie
 import {
   buildSuggestionRows,
   categoriesWithoutBudget,
-  categorySpent,
   dailyAllowance,
   defaultBudgetOf,
   planBudgetSave,
@@ -94,16 +93,6 @@ describe('categoriesWithoutBudget / unbudgetedSpending', () => {
       [null, 500, false],
     ]);
     expect(rows.reduce((s, r) => s + r.total, 0)).toBe(unbudgetedSpent);
-  });
-
-  it('categorySpent soma pagas e pendentes só da categoria e do mês', () => {
-    const transactions = [
-      tx({ categoryId: CATEGORY_IDS.mercado, amount: 1000, date: '2026-10-01' }),
-      tx({ categoryId: CATEGORY_IDS.mercado, amount: 2000, date: '2026-10-31', status: 'pendente' }),
-      tx({ categoryId: CATEGORY_IDS.mercado, amount: 4000, date: '2026-11-01' }),
-      tx({ type: 'receita', categoryId: CATEGORY_IDS.mercado, amount: 8000, date: '2026-10-10' }),
-    ];
-    expect(categorySpent(transactions, CATEGORY_IDS.mercado, '2026-10')).toBe(3000);
   });
 });
 

@@ -5,6 +5,7 @@ import { db } from '@/db/db';
 import { addAccount, addGoal, addGoalContribution, updateSettings } from '@/db/repo';
 import { CATEGORY_IDS } from '@/domain/defaults';
 import type { Account, Goal } from '@/domain/types';
+import { describeElements, gridsWithoutBaseColumns } from '@/test/layout';
 import { renderWithProviders, resetDb } from '@/test/render';
 import GoalsPage from './GoalsPage';
 
@@ -60,6 +61,15 @@ describe('GoalsPage', () => {
     vi.useRealTimers();
   });
 
+  it('nome da meta não é cortado numa linha só ao lado dos botões (até 2 linhas, texto completo no title)', async () => {
+    await seedGoal('Reserva de emergência para a família');
+    await renderPage();
+    const heading = await screen.findByRole('heading', { name: 'Reserva de emergência para a família', level: 3 });
+    expect(heading).not.toHaveClass('truncate');
+    expect(heading).toHaveClass('line-clamp-2');
+    expect(heading).toHaveAttribute('title', 'Reserva de emergência para a família');
+  });
+
   it('estado vazio: cria uma meta validando os campos e mostrando o plano mensal', async () => {
     const poupanca = await seedAccount('Poupança', { type: 'poupanca', icon: '🐷' });
     await seedAccount('Cartão', { type: 'cartao_credito', icon: '💳', initialBalance: 0 });
@@ -80,7 +90,8 @@ describe('GoalsPage', () => {
     expect(dialog.getByText('Escolha uma data a partir de hoje.')).toBeInTheDocument();
 
     fireEvent.change(dialog.getByLabelText('Prazo (opcional)'), { target: { value: '2027-04-30' } });
-    expect(dialog.getByText(/Para chegar lá em 6 meses/)).toHaveTextContent('guarde cerca de R$ 2.000,00 por mês');
+    // Outubro (ainda sem aporte) a abril: 7 meses de aporte.
+    expect(dialog.getByText(/Para chegar lá em 7 meses/)).toHaveTextContent('guarde cerca de R$ 1.714,29 por mês');
     await user.click(dialog.getByRole('button', { name: 'Usar ✈️' }));
     expect(dialog.getByLabelText('Emoji')).toHaveValue('✈️');
     await user.click(dialog.getByRole('radio', { name: 'Violeta' }));
@@ -105,12 +116,14 @@ describe('GoalsPage', () => {
 
     await screen.findByRole('article', { name: 'Viagem para o Chile' });
     const c = card('Viagem para o Chile');
-    expect(c.getByText('Atrasada')).toBeInTheDocument();
+    // Recém-criada e sem aportes: não nasce "Atrasada"; a dica é como começar (12.000 em 7 meses, out a abr).
+    expect(c.getByText('No ritmo')).toBeInTheDocument();
+    expect(c.queryByText('Atrasada')).not.toBeInTheDocument();
     expect(c.getByText('Prioridade alta')).toBeInTheDocument();
-    expect(c.getByText('Aporte mensal necessário').nextElementSibling).toHaveTextContent('R$ 2.000,00');
-    expect(c.getByText(/Comece com aportes de/)).toHaveTextContent('R$ 2.000,00 por mês');
+    expect(c.getByText('Aporte mensal necessário').nextElementSibling).toHaveTextContent('R$ 1.714,29');
+    expect(c.getByText(/Comece com aportes de/)).toHaveTextContent('R$ 1.714,29 por mês');
     expect(c.getByText(/Guardado em/)).toHaveTextContent('Guardado em 🐷 Poupança');
-    expect(c.getByText('Prazo').nextElementSibling).toHaveTextContent('30/04/2027em 6 meses');
+    expect(c.getByText('Prazo').nextElementSibling).toHaveTextContent('30/04/20277 meses para aportar');
   });
 
   it('modelo "Reserva de emergência" usa o alvo calculado pela reserva', async () => {
@@ -174,7 +187,7 @@ describe('GoalsPage', () => {
     expect(dialog.getByLabelText('Valor')).toHaveValue('2.000,00');
     await user.selectOptions(dialog.getByLabelText('Debitar de uma conta (opcional)'), banco.id);
     expect(dialog.getByText(/Será criada uma despesa/)).toHaveTextContent(
-      'Será criada uma despesa em “Investimentos e reserva” na conta Banco.',
+      'Será criada uma despesa em “Investimentos e reserva” na conta Banco: o valor sai dos seus saldos e do patrimônio.',
     );
     await user.click(dialog.getByRole('button', { name: 'Aportar' }));
 
@@ -313,10 +326,28 @@ describe('GoalsPage', () => {
     expect(summary.getByText('Aporte mensal necessário').nextElementSibling).toHaveTextContent('R$ 1.200,00');
     expect(summary.getByText('2 em andamento')).toBeInTheDocument();
 
+    // Meta criada neste mês: o ritmo divide só pelos meses desde o início dela (antes: 1.200 / 3 = 400 e "atrasada").
     const viagem = card('Viagem');
-    expect(viagem.getByText('Média de aportes').nextElementSibling).toHaveTextContent('R$ 400,00/mês');
-    expect(viagem.getByText('Previsão de conclusão').nextElementSibling).toHaveTextContent('outubro de 2027'); // 4.800 / 400 = 12 meses
-    expect(viagem.getByText(/aumente os aportes em cerca de/)).toHaveTextContent('R$ 400,00 por mês');
+    expect(viagem.getByText('Média de aportes').nextElementSibling).toHaveTextContent('R$ 1.200,00/mês');
+    expect(viagem.getByText('Previsão de conclusão').nextElementSibling).toHaveTextContent('fevereiro de 2027'); // 4.800 / 1.200 = 4 meses
+    expect(viagem.getByText('Você está no ritmo certo para cumprir o prazo. Continue assim!')).toBeInTheDocument();
+    expect(viagem.queryByText(/aumente os aportes em cerca de/)).not.toBeInTheDocument();
     expect(card('Sonho').getByRole('button', { name: 'Resgatar de Sonho' })).toBeDisabled();
+  });
+
+  it('layout no celular: grids com coluna base minmax(0,1fr), sem coluna "auto" que deixa os cards mais largos que a tela', async () => {
+    // Estado vazio (modelos em grade).
+    const { unmount } = renderWithProviders(<GoalsPage />, { route: '/metas' });
+    expect(await screen.findByText('Nenhuma meta ainda')).toBeInTheDocument();
+    expect(describeElements(gridsWithoutBaseColumns(document.body))).toEqual([]);
+    unmount();
+
+    // Com metas: resumo e cards (nome truncado, badges e botões de ação).
+    await seedGoal('Reserva de emergência para imprevistos da família', { targetAmount: 3000000 });
+    await seedGoal('Viagem', { targetAmount: 800000, targetDate: '2026-12-31' });
+    await renderPage();
+    await screen.findByRole('region', { name: 'Resumo das metas' });
+    await screen.findByRole('article', { name: 'Viagem' });
+    expect(describeElements(gridsWithoutBaseColumns(document.body))).toEqual([]);
   });
 });

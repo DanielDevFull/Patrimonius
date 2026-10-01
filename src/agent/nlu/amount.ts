@@ -46,22 +46,39 @@ function overlaps(a: Span, list: Span[]): boolean {
   return list.some((b) => a.start < b.end && b.start < a.end);
 }
 
+/** Centavos por extenso depois do valor: "(45 reais) e 90 centavos", "(R$ 50) com trinta centavos". */
+function centsTail(t: string, end: number): { cents: number; length: number } | null {
+  const rest = t.slice(end);
+  const digits = /^\s+(?:e|com)\s+(\d{1,2})\s+centavos?(?![a-z])/.exec(rest);
+  if (digits) return { cents: Number(digits[1]), length: digits[0].length };
+  const lead = /^\s+(?:e|com)\s+/.exec(rest);
+  if (!lead) return null;
+  const toks = tokenize(rest.slice(lead[0].length));
+  const w = readWordNumber(toks, 0);
+  if (!w || toks[0].start !== 0 || w.value < 1 || w.value > 99) return null;
+  const tail = /^\s+centavos?(?![a-z])/.exec(rest.slice(lead[0].length + toks[w.last].end));
+  if (!tail) return null;
+  return { cents: w.value, length: lead[0].length + toks[w.last].end + tail[0].length };
+}
+
 /** Todos os valores monetários do texto (já dobrado), na ordem em que aparecem. */
 export function findAmounts(t: string): AmountMatch[] {
   const blocked = nonMoneyRanges(t);
   const found: AmountMatch[] = [];
 
-  // 1) Numéricos: "R$ 45,90", "45.90", "1.200", "1,5 mil", "2k", "3 mil e 500", "50 reais".
-  const re = /(?<![\d.,/a-z])(r\$\s*)?(\d[\d.,]*\d|\d)(?:\s*(mil|k)(?![a-z]))?/g;
+  // 1) Numéricos: "R$ 45,90", "45.90", "1.200", "1,5 mil", "2k", "3 mil e 500", "50 reais" e, só depois de "R$",
+  //    milhar separado por espaço ("R$ 1 234,56"; sem o símbolo, "2 300" pode ser quantidade + valor).
+  const re =
+    /(?<![\d.,/a-z])(?:(r\$\s*)(\d{1,3}(?: \d{3})+(?:,\d{1,2})?)(?![\d.,])|(r\$\s*)?(\d[\d.,]*\d|\d))(?:\s*(mil|k)(?![a-z]))?/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(t))) {
     const start = m.index;
     let end = m.index + m[0].length;
     const span = { start, end };
-    if (overlaps(span, blocked)) continue;
-    const hasSymbol = Boolean(m[1]);
-    const numeric = m[2];
-    const scale = m[3];
+    if (overlaps(span, blocked) || overlaps(span, found)) continue;
+    const hasSymbol = Boolean(m[1] ?? m[3]);
+    const numeric = m[2] ?? m[4];
+    const scale = m[5];
     const after = t.slice(end);
     const before = t.slice(0, start);
     const cur = CURRENCY_SUFFIX.exec(after);
@@ -93,11 +110,16 @@ export function findAmounts(t: string): AmountMatch[] {
     }
     const curAfter = CURRENCY_SUFFIX.exec(t.slice(end));
     if (curAfter) end += curAfter[0].length;
+    const cents = !scale && !/[.,]\d{1,2}$/.test(numeric) ? centsTail(t, end) : null;
+    if (cents) {
+      value += cents.cents;
+      end += cents.length;
+    }
     found.push({
       start,
       end,
       amount: value,
-      strong: hasSymbol || Boolean(scale) || Boolean(curAfter) || /[.,]\d{1,2}$/.test(numeric),
+      strong: hasSymbol || Boolean(scale) || Boolean(curAfter) || Boolean(cents) || /[.,]\d{1,2}$/.test(numeric),
     });
   }
 
@@ -121,7 +143,9 @@ export function findAmounts(t: string): AmountMatch[] {
       end += cur[0].length;
     }
     if (w.value <= 0) continue;
-    found.push({ start, end, amount: w.value * 100, strong: Boolean(cur) || w.big });
+    const cents = cur ? centsTail(t, end) : null;
+    if (cents) end += cents.length;
+    found.push({ start, end, amount: w.value * 100 + (cents?.cents ?? 0), strong: Boolean(cur) || w.big });
   }
 
   return found.sort((a, b) => a.start - b.start);
@@ -132,6 +156,34 @@ export function pickAmount(list: AmountMatch[]): AmountMatch | null {
   return list.find((a) => a.strong) ?? list[0] ?? null;
 }
 
+/** Palavras que, logo depois de um número, indicam que ele NÃO é uma quantidade de itens ("50 no mercado"). */
+const NOT_AN_ITEM = new Set([
+  'no', 'na', 'nos', 'nas', 'em', 'de', 'do', 'da', 'dos', 'das', 'com', 'pra', 'para', 'pro', 'por', 'pelo',
+  'pela', 'e', 'ou', 'a', 'o', 'as', 'os', 'um', 'uma', 'ate', 'hoje', 'ontem', 'mil', 'k',
+]);
+/** Preço citado depois da quantidade: "2 pizzas de 40", "3 cervejas por 15", "2 cafés a 8 cada". */
+const PRICE_LEAD = /(?:^|\s)(?:de|por|a|custou|custaram|custando|cada|pagando|pagou|paguei|valor)\s*$/;
+
+/**
+ * Valor principal considerando quantidades: "comprei 2 pizzas de 40" => R$ 40,00 (quantidade 2), e não R$ 2,00.
+ * Só quando nenhum valor tem marcador forte, o primeiro é um inteiro pequeno seguido de um item e um valor
+ * posterior vem depois de "de/por/a/custou/cada". Senão, igual a `pickAmount`.
+ */
+export function pickAmountWithQuantity(
+  list: AmountMatch[],
+  t: string,
+): { amount: AmountMatch | null; quantity?: number } {
+  const fallback = { amount: pickAmount(list) };
+  if (list.length < 2 || list.some((a) => a.strong)) return fallback;
+  const first = list[0];
+  if (!/^\d{1,2}$/.test(t.slice(first.start, first.end))) return fallback;
+  const item = /^\s+([a-z]+)/.exec(t.slice(first.end));
+  if (!item || NOT_AN_ITEM.has(item[1])) return fallback;
+  const price = list.slice(1).find((a) => PRICE_LEAD.test(t.slice(first.end, a.start)));
+  if (!price) return fallback;
+  return { amount: price, quantity: first.amount / 100 };
+}
+
 /**
  * Extrai valor monetário: 'R$ 45,90', '45,90', '45.90', '50 reais', '1.200', '1,5 mil', '2k', 'cem reais',
  * 'mil e quinhentos', 'duzentos e cinquenta'. Não confunde com parcelas ('10x'), dias ('dia 15'),
@@ -140,7 +192,8 @@ export function pickAmount(list: AmountMatch[]): AmountMatch | null {
  */
 export function extractAmount(text: string): { amount: Cents; match: string } | null {
   if (typeof text !== 'string' || !text) return null;
-  const best = pickAmount(findAmounts(fold(text)));
+  const folded = fold(text);
+  const best = pickAmountWithQuantity(findAmounts(folded), folded).amount;
   return best ? { amount: best.amount, match: text.slice(best.start, best.end) } : null;
 }
 

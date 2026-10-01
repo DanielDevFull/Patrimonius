@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { CATEGORY_IDS } from '@/domain/defaults';
-import { makeAccount, makeData, makeTransaction } from '@/test/factories';
+import {
+  makeAccount,
+  makeContribution,
+  makeData,
+  makeDebt,
+  makeDebtPayment,
+  makeGoal,
+  makeTransaction,
+} from '@/test/factories';
 import {
   activeAccounts,
   categoryOptions,
   defaultAccountId,
+  installmentCounts,
   installmentPreview,
   otherAccountId,
   parseInstallments,
@@ -12,6 +21,7 @@ import {
   previousDescriptions,
   resolveDescription,
   stripInstallmentSuffix,
+  transactionLinks,
   validateTransactionForm,
   type TransactionFormCheck,
 } from './form-utils';
@@ -23,6 +33,7 @@ const base: TransactionFormCheck = {
   toAccountId: null,
   categoryId: CATEGORY_IDS.mercado,
   date: '2026-10-15',
+  today: '2026-10-15',
   installments: 1,
   installmentsApplies: true,
 };
@@ -176,6 +187,46 @@ describe('validateTransactionForm', () => {
       'Informe de 1 a 48 parcelas.',
     );
     expect(validateTransactionForm({ ...base, installments: null, installmentsApplies: false })).toEqual({});
+  });
+
+  it('ano digitado errado (ex.: 0226 ou 2062) não passa: o lançamento ficaria escondido mexendo no saldo', () => {
+    expect(validateTransactionForm({ ...base, date: '0226-01-10' }).date).toBe('Confira o ano da data.');
+    expect(validateTransactionForm({ ...base, date: '2062-01-10' }).date).toBe('Confira o ano da data.');
+    expect(validateTransactionForm({ ...base, date: '2027-03-10' })).toEqual({});
+    expect(validateTransactionForm({ ...base, date: '1999-12-31' })).toEqual({});
+  });
+});
+
+describe('installmentCounts', () => {
+  const g = { groupId: 'g1', total: 4 };
+  const parcels = [1, 2, 4].map((number) =>
+    makeTransaction({ accountId: 'a', installment: { ...g, number } }),
+  );
+  it('conta só as parcelas que ainda existem (a 3/4 foi excluída)', () => {
+    expect(installmentCounts(parcels, parcels[2])).toEqual({ group: 3, future: 1 });
+    expect(installmentCounts(parcels, parcels[1])).toEqual({ group: 3, future: 2 });
+  });
+  it('lançamento sem parcela conta como 1', () => {
+    expect(installmentCounts(parcels, makeTransaction({ accountId: 'a' }))).toEqual({ group: 1, future: 1 });
+  });
+});
+
+describe('transactionLinks', () => {
+  it('liga o lançamento ao pagamento da dívida ou ao aporte/resgate da meta', () => {
+    const debt = makeDebt({ name: 'Crediário' });
+    const goal = makeGoal({ name: 'Viagem' });
+    const links = transactionLinks({
+      debts: [debt],
+      goals: [goal],
+      debtPayments: [
+        makeDebtPayment({ debtId: debt.id, id: 'p1', transactionId: 't1' }),
+        makeDebtPayment({ debtId: debt.id, id: 'p2', transactionId: null }),
+      ],
+      goalContributions: [makeContribution({ goalId: goal.id, id: 'c1', amount: -500, transactionId: 't2' })],
+    });
+    expect(links.get('t1')).toEqual({ kind: 'debtPayment', id: 'p1', name: 'Crediário' });
+    expect(links.get('t2')).toEqual({ kind: 'goalContribution', id: 'c1', name: 'Viagem', amount: -500 });
+    expect(links.size).toBe(2);
   });
 });
 

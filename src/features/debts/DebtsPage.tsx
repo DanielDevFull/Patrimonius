@@ -262,6 +262,7 @@ export default function DebtsPage() {
         <PaymentModal
           debt={paying.debt}
           currentBalance={paying.currentBalance}
+          payments={data.debtPayments}
           accounts={data.accounts}
           today={today}
           onClose={() => setPayingId(null)}

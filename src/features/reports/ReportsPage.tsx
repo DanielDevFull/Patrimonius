@@ -1,7 +1,15 @@
 import { Download } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Button, PageHeader, SegmentedControl, Spinner, useToast } from '@/components/ui';
+import {
+  Button,
+  PageHeader,
+  SegmentedControl,
+  segmentPanelId,
+  segmentTabId,
+  Spinner,
+  useToast,
+} from '@/components/ui';
 import { downloadCSV, transactionsToCSV } from '@/db/backup';
 import { useFinanceData, useToday } from '@/db/hooks';
 import { formatMonthLong, monthKey } from '@/domain/dates';
@@ -23,6 +31,9 @@ const TABS: { value: ReportTab; label: string }[] = [
   { value: '503020', label: '50/30/20' },
   { value: 'comparativo', label: 'Comparativo' },
 ];
+
+/** Prefixo dos ids das abas/painel (aria-controls e aria-labelledby). */
+const REPORT_TABS_ID = 'relatorios';
 
 function parseTab(value: string | null): ReportTab {
   return TABS.some((t) => t.value === value) ? (value as ReportTab) : 'fechamento';
@@ -67,7 +78,6 @@ export default function ReportsPage() {
     }
   }
 
-  const tabLabel = TABS.find((t) => t.value === tab)?.label ?? '';
   const monthProps = { data, month, maxMonth: currentMonth, onMonthChange: setMonth };
 
   return (
@@ -84,6 +94,7 @@ export default function ReportsPage() {
 
       <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2">
         <SegmentedControl
+          mode="radio"
           options={PERIOD_OPTIONS}
           value={String(period) as `${typeof period}`}
           onChange={(v) => setPeriod(parsePeriod(v))}
@@ -100,11 +111,16 @@ export default function ReportsPage() {
           value={tab}
           onChange={changeTab}
           aria-label="Relatórios"
+          idPrefix={REPORT_TABS_ID}
           className="*:shrink-0 *:whitespace-nowrap"
         />
       </div>
 
-      <div role="tabpanel" aria-label={tabLabel}>
+      <div
+        role="tabpanel"
+        id={segmentPanelId(REPORT_TABS_ID, tab)}
+        aria-labelledby={segmentTabId(REPORT_TABS_ID, tab)}
+      >
         {tab === 'fechamento' && <ClosingTab {...monthProps} today={today} />}
         {tab === 'categorias' && <CategoriesTab data={data} months={months} />}
         {tab === 'fluxo' && <CashflowTab data={data} months={months} />}

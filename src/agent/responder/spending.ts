@@ -7,6 +7,7 @@ import {
   monthSummary,
   monthlySeries,
   resolveBudget,
+  savingsTargetPct,
   topExpenses,
   type CategoryTotal,
 } from '@/analytics';
@@ -22,7 +23,7 @@ import {
   parseISO,
 } from '@/domain/dates';
 import { formatBRL, formatPercent, formatSignedBRL } from '@/domain/money';
-import { capitalize, plural } from '@/domain/text';
+import { capitalize, normalizeText, plural } from '@/domain/text';
 import type { CategoryKind, MonthKey, Transaction } from '@/domain/types';
 import {
   accountPhrase,
@@ -33,11 +34,13 @@ import {
   monthPeriod,
   paragraphs,
   periodMonth,
+  periodPhrase,
   periodPhraseStart,
   relativeChange,
   sentences,
   toneOfAmount,
 } from '../format';
+import { escapeRegExp } from '../nlu/text';
 import type { AgentCard } from '../types';
 import {
   breakdownFor,
@@ -48,6 +51,7 @@ import {
   sum,
   transactionsIn,
   type Handler,
+  type HandlerOutput,
   type TurnContext,
 } from './context';
 
@@ -77,7 +81,78 @@ export function categoryList(title: string, rows: CategoryTotal[], limit = 5): A
   };
 }
 
-function flowQuery(ctx: TurnContext, kind: CategoryKind) {
+/** "quanto gastei com ifood?": lançamentos cuja descrição cita o termo (em qualquer categoria). */
+function termQuery(ctx: TurnContext, kind: CategoryKind): HandlerOutput | null {
+  const { data, entities: e } = ctx;
+  const term = e.term?.trim();
+  if (!term) return null;
+  const period = periodOrThisMonth(ctx);
+  const account = findAccount(data, e.accountId);
+  const key = normalizeText(term);
+  const re = new RegExp(`(?<![a-z0-9])${escapeRegExp(key)}(?![a-z0-9])`);
+  const txs = transactionsIn(data, period, kind, { accountId: account?.id }).filter((tx) =>
+    re.test(normalizeText(tx.description)),
+  );
+  if (txs.length === 0) return null;
+  const isExpense = kind === 'despesa';
+  const total = sum(txs.map((t) => t.amount));
+  const pending = sum(txs.filter((t) => t.status === 'pendente').map((t) => t.amount));
+  const category = findCategory(data, e.categoryId);
+  const categoryTotal =
+    category && category.kind === kind
+      ? sum(transactionsIn(data, period, kind, { categoryId: category.id, accountId: account?.id }).map((t) => t.amount))
+      : 0;
+  const parts: (string | null)[] = [
+    `${periodPhraseStart(period)}, você ${isExpense ? 'gastou' : 'recebeu'} ${money(total)} com “${term}”${account ? ` ${accountPhrase(account)}` : ''} em ${plural(txs.length, 'lançamento', 'lançamentos')}.`,
+    pending > 0
+      ? `Desse total, ${formatBRL(pending)} ainda ${isExpense ? 'está pendente (a pagar)' : 'está pendente (a receber)'}.`
+      : null,
+    category && categoryTotal > total
+      ? `Na categoria ${categoryLabel(category)} inteira, foram ${formatBRL(categoryTotal)}.`
+      : null,
+  ];
+  const items = [...txs]
+    .sort((a, b) => b.amount - a.amount || (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    .slice(0, 5)
+    .map((t) => ({ label: t.description, value: formatBRL(t.amount), hint: formatDateBR(t.date) }));
+  return {
+    text: sentences(parts),
+    cards: [
+      {
+        type: 'stat',
+        title: `“${term}” — ${period.label}`,
+        value: formatBRL(total),
+        hint: plural(txs.length, 'lançamento', 'lançamentos'),
+        tone: isExpense ? 'neutral' : 'positive',
+      },
+      { type: 'list', title: 'Lançamentos', items },
+    ],
+    suggestions: [
+      ...(periodMonth(period) === ctx.month ? ['E no mês passado?'] : []),
+      category ? `Quanto gastei com ${category.name} este mês?` : 'Quanto gastei este mês?',
+      'Onde estou gastando mais?',
+    ],
+    memory: { lastPeriod: period, lastCategoryId: category?.id, lastAccountId: account?.id, lastEntities: { term } },
+  };
+}
+
+function flowQuery(ctx: TurnContext, kind: CategoryKind): HandlerOutput {
+  const byTerm = termQuery(ctx, kind);
+  if (byTerm) return byTerm;
+  const out = categoryFlowQuery(ctx, kind);
+  const term = ctx.entities.term?.trim();
+  if (!term) return out;
+  // Nada com o termo: diz isso com todas as letras antes de mostrar a categoria.
+  const period = periodOrThisMonth(ctx);
+  const memory = out.memory && out.memory !== 'keep' ? { ...out.memory, lastEntities: { term } } : out.memory;
+  return {
+    ...out,
+    text: `Não encontrei lançamentos com “${term}” ${periodPhrase(period)}. ${out.text}`,
+    memory,
+  };
+}
+
+function categoryFlowQuery(ctx: TurnContext, kind: CategoryKind): HandlerOutput {
   const { data, entities: e } = ctx;
   const period = periodOrThisMonth(ctx);
   const category = findCategory(data, e.categoryId);
@@ -244,9 +319,17 @@ function expenseUntilDay(transactions: Transaction[], month: MonthKey, day: numb
 export const compareMonths: Handler = (ctx) => {
   const { data, entities: e, today } = ctx;
   const mentioned = e.period ? (periodMonth(e.period) ?? monthKey(e.period.start)) : null;
-  let other = mentioned && mentioned !== ctx.month ? mentioned : addMonthsToKey(ctx.month, -1);
-  let base = ctx.month;
-  if (other > base) [base, other] = [other, base];
+  const second = e.comparePeriod ? (periodMonth(e.comparePeriod) ?? monthKey(e.comparePeriod.start)) : null;
+  let other: MonthKey;
+  let base: MonthKey;
+  if (mentioned && second && mentioned !== second) {
+    // Dois meses citados ("compara setembro com agosto"): o mais recente é a base.
+    [base, other] = mentioned > second ? [mentioned, second] : [second, mentioned];
+  } else {
+    other = mentioned && mentioned !== ctx.month ? mentioned : addMonthsToKey(ctx.month, -1);
+    base = ctx.month;
+    if (other > base) [base, other] = [other, base];
+  }
   const ongoing = base === ctx.month;
   const baseLong = formatMonthLong(base);
   const otherLong = formatMonthLong(other);
@@ -374,16 +457,23 @@ export const monthSummaryReply: Handler = (ctx) => {
       memory,
     };
   }
-  const targetPct = data.settings.savingsRateTarget > 0 ? data.settings.savingsRateTarget : 20;
+  // Sem meta de poupança (0% nas Configurações), a taxa aparece sem comparação.
+  const targetPct = savingsTargetPct(data.settings);
   const net = s.net;
-  const result =
-    net >= 0
+  const hasPending = s.pendingExpense > 0 || s.pendingIncome > 0;
+  // Mês corrente com pendentes: "até agora" só conta o que já foi pago/recebido; o resto é previsão.
+  const forecastMode = isCurrent && hasPending;
+  const rateText = (rate: number) =>
+    `${formatPercent(rate)} da renda${s.invested > 0 ? ` (contando ${formatBRL(s.invested)} investidos)` : ''}${targetPct === null ? '.' : rate * 100 >= targetPct ? `, acima da sua meta de ${formatNumber(targetPct)}%. 👏` : `; sua meta é ${formatNumber(targetPct)}%.`}`;
+  const result = forecastMode
+    ? net >= 0
       ? sentences([
-          `Sobra de ${money(net)}`,
-          s.savingsRate !== null
-            ? `— você poupou ${formatPercent(s.savingsRate)} da renda${s.invested > 0 ? ` (contando ${formatBRL(s.invested)} investidos)` : ''}${s.savingsRate * 100 >= targetPct ? `, acima da sua meta de ${formatNumber(targetPct)}%. 👏` : `; sua meta é ${formatNumber(targetPct)}%.`}`
-            : '.',
+          `Contando os pendentes, o mês deve fechar com sobra de ${money(net)}`,
+          s.savingsRate !== null ? `— uma taxa de poupança prevista de ${rateText(s.savingsRate)}` : '.',
         ])
+      : `Contando os pendentes, o mês deve fechar com ${money(-net)} a mais de gastos do que de receitas.`
+    : net >= 0
+      ? sentences([`Sobra de ${money(net)}`, s.savingsRate !== null ? `— você poupou ${rateText(s.savingsRate)}` : '.'])
       : `Você gastou ${money(-net)} a mais do que ganhou.`;
   const rows = breakdownFor(data, monthPeriod(month, today), 'despesa');
   const top = rows.slice(0, 3).map((r) => `${categoryLabel(r)} (${formatBRL(r.total)})`);
@@ -395,17 +485,37 @@ export const monthSummaryReply: Handler = (ctx) => {
         ? `A previsão é fechar o mês com ${formatBRL(forecast.projectedEndBalance)} em caixa.`
         : `⚠️ A previsão é fechar o mês em ${formatBRL(forecast.projectedEndBalance)} — vale segurar os gastos variáveis.`;
   }
-  const text = paragraphs([
-    `Resumo de ${long}${isCurrent ? ' até agora' : ''}: entraram ${money(s.income)} e saíram ${money(s.expense)}. ${result}`,
-    s.pendingExpense > 0 || s.pendingIncome > 0
-      ? `Ainda há ${formatBRL(s.pendingExpense)} a pagar e ${formatBRL(s.pendingIncome)} a receber (lançamentos pendentes).`
-      : null,
-    top.length ? `Maiores gastos: ${joinList(top)}.` : null,
-    forecastLine,
-  ]);
+  const pendingLine = hasPending
+    ? `Ainda há ${formatBRL(s.pendingExpense)} a pagar e ${formatBRL(s.pendingIncome)} a receber (lançamentos pendentes).`
+    : null;
+  const text = forecastMode
+    ? paragraphs([
+        `Resumo de ${long} até agora: entraram ${money(s.paidIncome)} e saíram ${money(s.paidExpense)}.`,
+        sentences([pendingLine, result]),
+        top.length ? `Maiores gastos: ${joinList(top)}.` : null,
+        forecastLine,
+      ])
+    : paragraphs([
+        `Resumo de ${long}${isCurrent ? ' até agora' : ''}: entraram ${money(s.income)} e saíram ${money(s.expense)}. ${result}`,
+        pendingLine,
+        top.length ? `Maiores gastos: ${joinList(top)}.` : null,
+        forecastLine,
+      ]);
   const cards: AgentCard[] = [
-    { type: 'stat', title: 'Receitas', value: formatBRL(s.income), tone: 'positive' },
-    { type: 'stat', title: 'Despesas', value: formatBRL(s.expense), tone: 'neutral' },
+    {
+      type: 'stat',
+      title: 'Receitas',
+      value: formatBRL(s.income),
+      hint: s.pendingIncome > 0 ? `Inclui ${formatBRL(s.pendingIncome)} a receber` : undefined,
+      tone: 'positive',
+    },
+    {
+      type: 'stat',
+      title: 'Despesas',
+      value: formatBRL(s.expense),
+      hint: s.pendingExpense > 0 ? `Inclui ${formatBRL(s.pendingExpense)} a pagar` : undefined,
+      tone: 'neutral',
+    },
     {
       type: 'stat',
       title: 'Resultado do mês',

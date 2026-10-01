@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { Route, Routes } from 'react-router';
@@ -9,7 +9,7 @@ import { CATEGORY_IDS } from '@/domain/defaults';
 import type { Account } from '@/domain/types';
 import { renderWithProviders, resetDb } from '@/test/render';
 import AssistantPage from './AssistantPage';
-import { readAgentPayload } from './chat-utils';
+import { makePayload, readAgentPayload } from './chat-utils';
 
 const TODAY = '2026-10-15';
 /** Resposta do agente leva ~400ms (indicador "digitando…") + gravações no banco. */
@@ -50,6 +50,11 @@ function messageField() {
 
 async function sendMessage(user: ReturnType<typeof userEvent.setup>, text: string) {
   await user.type(messageField(), `${text}{Enter}`);
+}
+
+/** Matcher do balão do usuário pelo texto completo (os valores ficam em <span class="money"> separados). */
+function bubbleText(text: string) {
+  return (_: string, el: Element | null) => el?.tagName === 'DIV' && el.textContent === text;
 }
 
 async function chatMessages() {
@@ -99,7 +104,7 @@ describe('AssistantPage', { timeout: 20000 }, () => {
 
     await sendMessage(user, 'gastei 50 no mercado hoje');
     expect(messageField()).toHaveValue('');
-    expect(await screen.findByText('gastei 50 no mercado hoje')).toBeInTheDocument();
+    expect(await screen.findByText(bubbleText('gastei 50 no mercado hoje'))).toBeInTheDocument();
     expect(await screen.findByText('Pat está digitando…')).toBeInTheDocument();
 
     const card = within(await screen.findByRole('region', { name: 'Registrar despesa: confirmação' }, REPLY));
@@ -191,6 +196,87 @@ describe('AssistantPage', { timeout: 20000 }, () => {
     expect(txs).toHaveLength(1);
     expect(txs[0]).toMatchObject({ amount: 5000, description: 'Feira da semana', accountId: banco.id });
     await waitFor(() => expect(card.getByText('Registrado')).toBeInTheDocument());
+  });
+
+  it('Editar: o card "Registrado" mostra os valores salvos, inclusive depois de recarregar', async () => {
+    await seedAccount('Banco');
+    const user = await renderPage();
+    await waitGreeting();
+    await sendMessage(user, 'gastei 50 no mercado hoje');
+    const card = within(await screen.findByRole('region', { name: 'Registrar despesa: confirmação' }, REPLY));
+
+    await user.click(card.getByRole('button', { name: 'Editar' }));
+    await screen.findByLabelText('Valor', undefined, REPLY);
+    const dialog = within(screen.getByRole('dialog', { name: 'Novo lançamento' }));
+    await user.clear(dialog.getByLabelText('Valor'));
+    await user.type(dialog.getByLabelText('Valor'), '55');
+    await user.click(dialog.getByRole('button', { name: 'Salvar' }));
+
+    expect(await screen.findByText(/Pronto! Registrei a despesa de/, undefined, REPLY)).toBeInTheDocument();
+    expect((await db.transactions.toArray())[0].amount).toBe(5500);
+    await waitFor(() => expect(card.getByText('Registrado')).toBeInTheDocument());
+    await waitFor(() => expect(card.getByText('R$ 55,00')).toBeInTheDocument());
+    expect(card.queryByText('R$ 50,00')).not.toBeInTheDocument();
+    const proposal = (await chatMessages()).find((m) => readAgentPayload(m.payload)?.reply.actions[0]?.type === 'create_transaction');
+    const action = readAgentPayload(proposal?.payload)?.reply.actions[0];
+    expect(action?.type === 'create_transaction' && action.draft.amount).toBe(5500);
+
+    // "Recarregar": o histórico persistido continua com o valor salvo.
+    cleanup();
+    await renderPage();
+    const reloaded = within(await screen.findByRole('region', { name: 'Registrar despesa: confirmação' }, REPLY));
+    expect(reloaded.getByText('Registrado')).toBeInTheDocument();
+    expect(reloaded.getByText('R$ 55,00')).toBeInTheDocument();
+    expect(reloaded.queryByText('R$ 50,00')).not.toBeInTheDocument();
+  });
+
+  it('Editar com outra conta: o card registrado mostra a conta salva (não a escolhida antes no card)', async () => {
+    await seedAccount('Banco');
+    const nubank = await seedAccount('Nubank', { icon: '💜' });
+    const banco2 = await seedAccount('Itaú', { icon: '🟧' });
+    const user = await renderPage();
+    await waitGreeting();
+    await sendMessage(user, 'gastei 50 no mercado hoje');
+    const card = within(await screen.findByRole('region', { name: 'Registrar despesa: confirmação' }, REPLY));
+    await user.selectOptions(card.getByLabelText('Conta ou cartão'), banco2.id);
+
+    await user.click(card.getByRole('button', { name: 'Editar' }));
+    await screen.findByLabelText('Valor', undefined, REPLY);
+    const dialog = within(screen.getByRole('dialog', { name: 'Novo lançamento' }));
+    expect(dialog.getByLabelText('Conta ou cartão')).toHaveValue(banco2.id);
+    await user.selectOptions(dialog.getByLabelText('Conta ou cartão'), nubank.id);
+    await user.click(dialog.getByRole('button', { name: 'Salvar' }));
+
+    await screen.findByText(/Pronto! Registrei a despesa de/, undefined, REPLY);
+    expect((await db.transactions.toArray())[0].accountId).toBe(nubank.id);
+    await waitFor(() => expect(card.getByText('Registrado')).toBeInTheDocument());
+    expect(card.getByText('💜 Nubank')).toBeInTheDocument();
+    expect(card.queryByText('🟧 Itaú')).not.toBeInTheDocument();
+  });
+
+  it('modo "ocultar valores": valores digitados pelo usuário e das sugestões ficam marcados com .money', async () => {
+    await addChatMessage('user', 'gastei 1.250 no aluguel e recebi 9650 de salário');
+    await new Promise((r) => setTimeout(r, 5));
+    await addChatMessage(
+      'agent',
+      'Entendi: despesa de R$ 1.250,00.',
+      makePayload({
+        intent: 'criar_meta',
+        text: 'Entendi: despesa de R$ 1.250,00.',
+        cards: [],
+        actions: [],
+        suggestions: ['Guardei 200 na meta Carro', 'Qual meu saldo?'],
+      }),
+    );
+    await renderPage();
+    const log = screen.getByRole('log');
+    const bubble = await within(log).findByText(bubbleText('gastei 1.250 no aluguel e recebi 9650 de salário'));
+    expect([...bubble.querySelectorAll('.money')].map((el) => el.textContent)).toEqual(['1.250', '9650']);
+
+    const chips = within(screen.getByRole('group', { name: 'Sugestões de perguntas' }));
+    const chip = chips.getByRole('button', { name: 'Guardei 200 na meta Carro' });
+    expect([...chip.querySelectorAll('.money')].map((el) => el.textContent)).toEqual(['200']);
+    expect(chips.getByRole('button', { name: 'Qual meu saldo?' }).querySelector('.money')).toBeNull();
   });
 
   it('clicar em uma sugestão envia a mensagem', async () => {

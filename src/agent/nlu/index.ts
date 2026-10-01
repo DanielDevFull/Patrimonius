@@ -3,16 +3,16 @@ import { normalizeText } from '@/domain/text';
 import type { Account, Category, Goal, ISODate, Transaction } from '@/domain/types';
 import { suggestCategory } from '../categorizer';
 import type { IntentName, ParsedEntities, ParsedIntent, Period } from '../types';
-import { findAmounts, findInstallments, pickAmount } from './amount';
+import { findAmounts, findInstallments, pickAmountWithQuantity } from './amount';
 import { findDates } from './dates';
 import { buildDescription, VERB_NOUN } from './description';
 import { matchGoal, rankAccounts, scoreCategories, type CategoryHit } from './entities';
-import { classify, correctTypos, INTERROGATIVE } from './intents';
+import { classify, correctTypos, INTERROGATIVE, isHabitualStatement } from './intents';
 import { bestMentionAccount, defaultSource, findAccountMentions } from './mentions';
 import { findPeriod } from './period';
 import { budgetMonth, goalMonths, goalName, goalTargetDate } from './planning';
 import { CATEGORY_SYNONYMS } from './synonyms';
-import { expandSlang, fold, maskSpans, words, type Span } from './text';
+import { expandSlang, fold, maskSpans, sameWord, words, type Span } from './text';
 
 export { extractAmount } from './amount';
 export { extractDate } from './dates';
@@ -92,9 +92,43 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
   const dates = findDates(t1, today);
   const t2 = maskSpans(t1, dates);
   const amounts = findAmounts(t2);
-  const amount = pickAmount(amounts);
+  // "comprei 2 pizzas de 40": a quantidade (2) não é o valor.
+  const { amount, quantity } = pickAmountWithQuantity(amounts, t2);
+  // "em 10x de 50": o valor logo depois das parcelas é o de CADA parcela (total = 10 × 50).
+  const perInstallment = Boolean(
+    inst && inst.count >= 2 && amount && amount.start >= inst.end && /^\s*de\s*$/.test(t2.slice(inst.end, amount.start)),
+  );
+  const amountValue = amount ? (perInstallment && inst ? amount.amount * inst.count : amount.amount) : undefined;
   // Só o valor principal é mascarado: números soltos podem ser entidades ("99" = app de transporte).
   const t3 = maskSpans(t2, amount ? [amount] : []);
+
+  // Outros lançamentos na mesma mensagem ("gastei 50 no mercado e 30 na farmácia"): a partir do separador antes do
+  // próximo valor, o texto não entra na descrição/categoria do primeiro e é devolvido em `otherEntries`.
+  const otherEntries: string[] = [];
+  let cut: number | null = null;
+  if (amount) {
+    const separators: number[] = [];
+    let prevEnd = amount.end;
+    for (const next of amounts) {
+      if (next.start < amount.end) continue;
+      const gap = t2.slice(prevEnd, next.start);
+      const sep = /(?:[,;]|\s(?:e|mais|tambem)\s)/.exec(gap);
+      if (sep) {
+        cut ??= prevEnd + sep.index;
+        separators.push(prevEnd + sep.index + sep[0].length);
+      }
+      prevEnd = next.end;
+    }
+    separators.forEach((segStart, i) => {
+      const text = raw
+        .slice(segStart, separators[i + 1] ?? raw.length)
+        .replace(/^[\s,;]+|[\s,;.!]+$/g, '')
+        .replace(/\s+(?:e|mais|tambem|também)$/i, '')
+        .trim();
+      if (text) otherEntries.push(text);
+    });
+  }
+  const afterCut: Span[] = cut !== null ? [{ start: cut, end: t.length }] : [];
 
   // 2) Contas citadas ("no cartão nubank", "da corrente para a poupança").
   const mentions = findAccountMentions(t3, ctx.accounts);
@@ -113,7 +147,7 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
   const periodMatch = findPeriod(tc, today);
   const interrogative = INTERROGATIVE.test(tc.trim());
 
-  const { intent, confidence } = classify({
+  const classified = classify({
     tc,
     hasAmount: amount !== null,
     question: raw.includes('?') || interrogative,
@@ -125,6 +159,19 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
     contentWords: desc.tokens.length,
     incomeLikely: Boolean(incomeHit && (!expenseHit || incomeHit.score > expenseHit.score)),
   });
+  let { intent, confidence } = classified;
+  // Rede de segurança: "paguei <...> da fatura do cartão" com o verbo longe de "fatura" e sem categoria de gasto é
+  // pagamento da fatura (transferência para o cartão), não uma despesa nova no próprio cartão.
+  if (
+    intent === 'registrar_despesa' &&
+    !expenseHit &&
+    /\b(paguei|pagamos|quitei)\b/.test(t) &&
+    /\bfatura\b/.test(t) &&
+    mentions.some((m) => ctx.accounts.find((a) => a.id === m.account?.accountId)?.type === 'cartao_credito')
+  ) {
+    intent = 'registrar_transferencia';
+    confidence = 0.8;
+  }
 
   const e: ParsedEntities = {};
   const mentionAccount = bestMentionAccount(mentions);
@@ -141,18 +188,38 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
     case 'registrar_despesa':
     case 'registrar_receita': {
       const kind = intent === 'registrar_despesa' ? 'despesa' : 'receita';
-      e.amount = amount?.amount;
+      e.amount = amountValue;
       e.date = firstDate;
+      // Sem dia exato, mas com um período já passado ("mês passado", "semana passada", "em setembro"): usa o último
+      // dia do período e avisa. "aluguel de setembro" (mês como complemento) não conta.
+      if (
+        !e.date &&
+        periodMatch &&
+        periodMatch.period.end < today &&
+        !/\b(?:de|do|da)\s*$/.test(tc.slice(0, periodMatch.start))
+      ) {
+        e.date = periodMatch.period.end;
+        e.dateApprox = true;
+        e.period = periodMatch.period;
+      }
       if (kind === 'despesa' && inst && inst.count >= 2) e.installments = inst.count;
+      if (quantity && quantity > 1) e.quantity = quantity;
+      const ownMentions = mentions.filter((m) => cut === null || m.span.start < cut);
       e.accountId =
-        mentionAccount?.accountId ??
-        rankAccounts(t4, ctx.accounts).find((r) => r.confidence >= 0.85)?.accountId;
-      let description = desc.text;
+        bestMentionAccount(ownMentions)?.accountId ??
+        rankAccounts(maskSpans(t4, afterCut), ctx.accounts).find((r) => r.confidence >= 0.85)?.accountId;
+      const own = cut === null ? desc : buildDescription(raw, t, [...descMasks, ...afterCut]);
+      let description = own.text;
       if (!description) {
         const verb = words(t).find((w) => w in VERB_NOUN);
         if (verb) description = VERB_NOUN[verb];
       }
-      const hit = kind === 'despesa' ? expenseHit : incomeHit;
+      const hit =
+        cut === null
+          ? kind === 'despesa'
+            ? expenseHit
+            : incomeHit
+          : scoreCategories(maskSpans(t4, afterCut), ctx.categories, kind)[0];
       const history =
         description && ctx.transactions?.length
           ? suggestCategory(description, kind, ctx.categories, ctx.transactions)
@@ -168,10 +235,11 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
       }
       if (!description && e.categoryId) description = ctx.categories.find((c) => c.id === e.categoryId)?.name;
       e.description = description;
+      if (otherEntries.length) e.otherEntries = otherEntries;
       break;
     }
     case 'registrar_transferencia': {
-      e.amount = amount?.amount;
+      e.amount = amountValue;
       e.date = firstDate;
       const resolved = mentions.filter((m) => m.account);
       let origin = resolved.find((m) => m.role === 'origem')?.account?.accountId;
@@ -179,7 +247,8 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
         ?.accountId;
       const isInvoice = /\bfatura\b/.test(t);
       const isWithdrawal = /\b(saquei|sacar|saque)\b/.test(t);
-      const isRedeem = /\b(resgatei|resgatar|resgate)\b/.test(t);
+      // Resgate ou retirada de uma conta própria ("tirei 200 da poupança"): volta para a conta principal.
+      const isRedeem = /\b(resgatei|resgatar|resgate|tirei|retirei|puxei|tirar|retirar|puxar)\b/.test(t);
       if (isInvoice) {
         const card =
           resolved.find(
@@ -208,12 +277,12 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
       break;
     }
     case 'definir_orcamento':
-      e.amount = amount?.amount;
+      e.amount = amountValue;
       Object.assign(e, hitToEntity(expenseHit));
       e.budgetMonth = budgetMonth(tc, today);
       break;
     case 'criar_meta': {
-      e.amount = amount?.amount;
+      e.amount = amountValue;
       const months = goalMonths(t);
       const masked = maskSpans(
         t,
@@ -229,7 +298,7 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
       break;
     }
     case 'aportar_meta':
-      e.amount = amount?.amount;
+      e.amount = amountValue;
       e.date = firstDate;
       e.goalId = goalHit?.goalId;
       e.accountId = mentionAccount?.accountId;
@@ -238,21 +307,31 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
       if (goalHit && goalHit.confidence >= 0.75) e.goalId = goalHit.goalId;
       break;
     case 'posso_gastar': {
-      e.amount = amount?.amount;
+      e.amount = amountValue;
       if (inst && inst.count >= 1) e.installments = inst.count;
       e.description = desc.text;
+      if (!e.description) {
+        const verb = words(t).find((w) => w in VERB_NOUN);
+        if (verb) e.description = VERB_NOUN[verb];
+      }
       Object.assign(e, hitToEntity(expenseHit));
       e.accountId = mentionAccount?.accountId;
       break;
     }
-    case 'consultar_saldo':
+    case 'consultar_saldo': {
       e.accountId =
         mentionAccount?.accountId ??
         rankAccounts(t3, ctx.accounts).find((r) => r.confidence >= 0.7)?.accountId;
+      // "qual a fatura?", "quanto devo no cartão?": com um único cartão ativo, é ele.
+      if (!e.accountId && /\b(faturas?|cartao|cartoes)\b/.test(t)) {
+        const cards = ctx.accounts.filter((a) => !a.archived && a.type === 'cartao_credito');
+        if (cards.length === 1) e.accountId = cards[0].id;
+      }
       break;
+    }
     case 'status_dividas':
     case 'plano_dividas':
-      e.amount = amount?.amount;
+      e.amount = amountValue;
       break;
     default:
       break;
@@ -264,24 +343,77 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
       Object.assign(e, hitToEntity(expenseHit));
     }
     if (intent === 'consultar_receitas') Object.assign(e, hitToEntity(incomeHit));
-    if (intent === 'consultar_gastos' || intent === 'consultar_receitas')
+    if (intent === 'consultar_gastos' || intent === 'consultar_receitas') {
       e.accountId = mentionAccount?.accountId;
+      const term = specificTerm(intent === 'consultar_gastos' ? expenseHit : incomeHit, ctx.categories, raw, t);
+      if (term) e.term = term;
+    }
+    // "compara setembro com agosto": o segundo mês citado vira a base da comparação.
+    if (intent === 'comparar_meses' && periodMatch?.month) {
+      const second = findPeriod(maskSpans(tc, [periodMatch]), today);
+      if (second?.month && second.month !== periodMatch.month) {
+        const [older, newer] = periodMatch.month < second.month ? [periodMatch, second] : [second, periodMatch];
+        e.period = older.period;
+        e.comparePeriod = newer.period;
+      }
+    }
   }
 
   if (intent === 'desconhecido') {
-    // Continuação curta ("e no mês passado?", "e com lazer?"): sem intenção própria, mas com entidades
+    // Continuação curta ("e no mês passado?", "e com lazer?", "e em 10x?"): sem intenção própria, mas com entidades
     // que o respondedor completa usando o estado da conversa (ConversationState).
     const best = expenseHit && (!incomeHit || expenseHit.score >= incomeHit.score) ? expenseHit : incomeHit;
     Object.assign(e, hitToEntity(best));
     e.accountId = mentionAccount?.accountId;
     if (goalHit && goalHit.confidence >= 0.75) e.goalId = goalHit.goalId;
-    e.amount = amount?.amount;
+    e.amount = amountValue;
     e.date = firstDate;
-    const hasEntity = Boolean(e.period || e.categoryId || e.accountId || e.goalId || e.amount);
-    finalConfidence = hasEntity ? (/^\s*e\b/.test(tc) ? 0.3 : 0.2) : Math.min(confidence, 0.05);
+    if (inst && inst.count >= 1) e.installments = inst.count;
+    const habitual = isHabitualStatement(tc);
+    if (habitual) e.habitual = true;
+    const hasEntity = Boolean(e.period || e.categoryId || e.accountId || e.goalId || e.amount || e.installments);
+    // Muitas palavras além das entidades ("me conta uma piada") => não é continuação.
+    finalConfidence = habitual
+      ? 0.1
+      : hasEntity
+        ? /^\s*e\b/.test(tc)
+          ? 0.3
+          : desc.tokens.length <= 2
+            ? 0.2
+            : 0.1
+        : Math.min(confidence, 0.05);
   }
 
   return { intent, confidence: finalConfidence, entities: clean(e), raw, normalized };
+}
+
+/**
+ * Termo específico de uma consulta ("ifood", "uber", "luz"): a categoria veio por palavra-chave ou sinônimo que não é
+ * o próprio nome da categoria ("restaurante" não conta). Devolve o trecho com a grafia original.
+ */
+function specificTerm(hit: CategoryHit | undefined, categories: Category[], raw: string, t: string): string | undefined {
+  if (!hit || (hit.source !== 'palavra_chave' && hit.source !== 'sinonimo')) return undefined;
+  const phrase = t.slice(hit.span.start, hit.span.end).trim();
+  const category = categories.find((c) => c.id === hit.categoryId);
+  if (!phrase || !category) return undefined;
+  const nameWords = words(fold(category.name));
+  if (words(phrase).every((w) => nameWords.some((n) => sameWord(n, w)))) return undefined;
+  return raw.slice(hit.span.start, hit.span.end).trim();
+}
+
+/**
+ * Prazo de uma meta citado numa mensagem solta ("10 mil em 12 meses", "até dezembro de 2027"): usado quando o valor
+ * chega como resposta a "Quanto você quer juntar?".
+ */
+export function extractGoalTiming(text: string, today: ISODate): Pick<ParsedEntities, 'months' | 'targetDate'> {
+  const t = fold(typeof text === 'string' ? text : '');
+  const months = goalMonths(t);
+  const out: Pick<ParsedEntities, 'months' | 'targetDate'> = {};
+  const target = goalTargetDate(t, today);
+  if (months) out.months = months.months;
+  if (target) out.targetDate = target;
+  else if (months) out.targetDate = addMonths(today, months.months);
+  return out;
 }
 
 /**
@@ -299,7 +431,13 @@ function parse(raw: string, ctx: NluContext): ParsedIntent {
  *
  * Contas em transferências: "da X" = origem, "para/pra/na X" = destino; sem origem citada, usa-se a primeira
  * conta corrente (ou a primeira conta que não é cartão). "Saquei" => destino carteira; "paguei a fatura" =>
- * destino cartão de crédito. Em metas, um prazo em meses ("em 8 meses") também preenche targetDate = hoje + N meses.
+ * destino cartão de crédito; "tirei 200 da poupança" => da poupança para a conta principal. Em metas, um prazo em
+ * meses ("em 8 meses") também preenche targetDate = hoje + N meses.
+ *
+ * Valores: "10x de 50" é o valor da PARCELA (amount = 500, installments = 10); "2 pizzas de 40" => amount 40 e
+ * quantity 2; "45 reais e 90 centavos" => 4590. Registros com um período já passado e sem dia ("mês passado")
+ * recebem a data do fim do período com dateApprox. Outros valores na mesma mensagem ("e 30 na farmácia") vão para
+ * otherEntries. Frases no presente com valor ("recebo 9650 dia 5") voltam como 'desconhecido' com habitual = true.
  */
 export function parseMessage(text: string, ctx: NluContext): ParsedIntent {
   const raw = typeof text === 'string' ? text : '';

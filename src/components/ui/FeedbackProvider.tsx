@@ -1,9 +1,11 @@
 import { CheckCircle2, Info, XCircle } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from './Button';
 import { cn } from './cn';
 import { FeedbackContext, type ConfirmOptions, type FeedbackApi, type ToastTone } from './feedback-context';
 import { Modal } from './Modal';
+import { MoneyText } from './MoneyText';
 
 interface ToastItem {
   id: number;
@@ -32,10 +34,10 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
     setConfirmState(null);
   }, []);
 
-  const toast = useCallback((message: string, tone: ToastTone = 'success') => {
+  const toast = useCallback((message: string, tone: ToastTone = 'success', durationMs = 3500) => {
     const id = nextId.current++;
     setToasts((t) => [...t, { id, message, tone }]);
-    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3500);
+    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), durationMs);
   }, []);
 
   const api = useMemo<FeedbackApi>(() => ({ confirm, toast }), [confirm, toast]);
@@ -53,36 +55,50 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
             <Button variant="secondary" onClick={() => close(false)}>
               {confirmState?.cancelLabel ?? 'Cancelar'}
             </Button>
-            <Button variant={confirmState?.danger ? 'danger' : 'primary'} onClick={() => close(true)} data-autofocus>
+            <Button
+              variant={confirmState?.danger ? 'danger' : 'primary'}
+              onClick={() => close(true)}
+              data-autofocus
+            >
               {confirmState?.confirmLabel ?? 'Confirmar'}
             </Button>
           </>
         }
       >
-        {confirmState?.message && <p className="text-sm text-slate-600 dark:text-slate-300">{confirmState.message}</p>}
+        {/* MoneyText: valores em reais na mensagem são borrados no modo "ocultar valores". */}
+        {confirmState?.message && (
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            <MoneyText text={confirmState.message} />
+          </p>
+        )}
       </Modal>
-      <div
-        aria-live="polite"
-        className="pointer-events-none fixed inset-x-0 bottom-20 z-[60] flex flex-col items-center gap-2 px-4 lg:bottom-6"
-      >
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className={cn(
-              'pointer-events-auto flex max-w-md items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-lg',
-              t.tone === 'success' && 'bg-emerald-600',
-              t.tone === 'error' && 'bg-rose-600',
-              t.tone === 'info' && 'bg-slate-800',
-            )}
-            role="status"
-          >
-            {t.tone === 'success' && <CheckCircle2 size={18} />}
-            {t.tone === 'error' && <XCircle size={18} />}
-            {t.tone === 'info' && <Info size={18} />}
-            {t.message}
-          </div>
-        ))}
-      </div>
+      {/* Portal no <body>: fora do #root, que fica inerte enquanto um modal está aberto (o aviso continua audível). */}
+      {createPortal(
+        <div
+          aria-live="polite"
+          className="pointer-events-none fixed inset-x-0 bottom-20 z-[60] flex flex-col items-center gap-2 px-4 lg:bottom-6"
+        >
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              className={cn(
+                'pointer-events-auto flex max-w-md items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-lg',
+                // emerald-700: contraste AA (≈5,4:1) com o texto branco; emerald-600 dá só 3,65:1.
+                t.tone === 'success' && 'bg-emerald-700',
+                t.tone === 'error' && 'bg-rose-600',
+                t.tone === 'info' && 'bg-slate-800',
+              )}
+              role="status"
+            >
+              {t.tone === 'success' && <CheckCircle2 size={18} />}
+              {t.tone === 'error' && <XCircle size={18} />}
+              {t.tone === 'info' && <Info size={18} />}
+              {t.message}
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
     </FeedbackContext.Provider>
   );
 }

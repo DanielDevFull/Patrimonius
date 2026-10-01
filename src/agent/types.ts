@@ -71,6 +71,18 @@ export interface ParsedEntities {
   months?: number;
   /** Mês de referência para orçamento (null = todos os meses / padrão). */
   budgetMonth?: MonthKey | null;
+  /** Segundo mês citado numa comparação ("compara setembro com agosto": period = agosto, comparePeriod = setembro). */
+  comparePeriod?: Period;
+  /** true quando `date` foi deduzida de um período ("mês passado") e não de um dia exato: o usuário deve conferir. */
+  dateApprox?: boolean;
+  /** Quantidade de itens citada antes do preço ("comprei 2 pizzas de 40": quantity 2, amount = 40). */
+  quantity?: number;
+  /** Outros lançamentos citados na mesma mensagem, no texto original ("e 30 na farmácia" => ['30 na farmácia']). */
+  otherEntries?: string[];
+  /** Estabelecimento/item citado numa consulta ("quanto gastei com ifood?" => 'ifood'), além da categoria. */
+  term?: string;
+  /** Frase no presente que descreve um hábito com valor ("recebo 9650 dia 5"): não é um lançamento. */
+  habitual?: boolean;
 }
 
 export interface ParsedIntent {
@@ -152,6 +164,13 @@ export interface ConversationState {
   lastPeriod?: Period;
   lastCategoryId?: ID;
   lastAccountId?: ID;
+  /**
+   * Entidades da última resposta que uma continuação reaproveita: o rascunho de lançamento ("foi ontem",
+   * "no cartão"), a compra simulada ("e em 10x?") ou o pedido à espera do valor (meta, transferência, aporte...).
+   */
+  lastEntities?: ParsedEntities;
+  /** O Pat perguntou o valor ("Qual foi o valor?", "Quanto você quer juntar?"): o próximo valor completa `lastEntities`. */
+  awaitingAmount?: boolean;
 }
 
 /* ------------------------------------------------------------------ */

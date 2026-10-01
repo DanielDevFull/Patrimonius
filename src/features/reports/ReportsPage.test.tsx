@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { monthlyReport } from '@/agent';
 import { addAccount, addTransaction, loadFinanceData, type NewTransactionInput } from '@/db/repo';
 import { CATEGORY_IDS } from '@/domain/defaults';
+import { describeElements, gridsWithoutBaseColumns, unpositionedScrollersWithSrOnly } from '@/test/layout';
 import { renderWithProviders, resetDb } from '@/test/render';
 import ReportsPage from './ReportsPage';
 
@@ -120,7 +121,7 @@ describe('ReportsPage', () => {
       'R$ 6.200,00',
     ]);
 
-    await user.click(screen.getByRole('tab', { name: '3 meses' }));
+    await user.click(screen.getByRole('radio', { name: '3 meses' }));
     const short = await screen.findByRole('table', { name: 'Fluxo de caixa mensal' });
     await waitFor(() =>
       expect(within(short).getAllByRole('rowheader').map((h) => h.textContent)).toEqual([
@@ -162,7 +163,7 @@ describe('ReportsPage', () => {
     await user.selectOptions(select, CATEGORY_IDS.lazer);
     expect(trend.getByText('Total no período').nextElementSibling).toHaveTextContent('R$ 300,00');
 
-    await user.click(screen.getByRole('tab', { name: 'Receitas' }));
+    await user.click(screen.getByRole('radio', { name: 'Receitas' }));
     const income = await screen.findByRole('table', { name: /Receitas por categoria/ });
     expect(cellTexts(rowOf(income, '💼 Salário')).slice(-2)).toEqual(['R$ 9.000,00', 'R$ 1.500,00']);
   });
@@ -193,7 +194,10 @@ describe('ReportsPage', () => {
     const change = within(market).getAllByRole('cell')[2];
     expect(change).toHaveTextContent('↑Aumento deR$ 400,00(50%)');
     expect(within(change).getByText('↑').parentElement).toHaveClass('text-rose-600');
+    // Percentual em texto pequeno sem opacity (contraste AA da cor cheia).
+    expect(within(change).getByText('(50%)')).not.toHaveClass('opacity-80');
     expect(within(rowOf(table, '🎉 Lazer')).getAllByRole('cell')[2]).toHaveTextContent('(novo)');
+    expect(within(rowOf(table, '🎉 Lazer')).getByText('(novo)')).not.toHaveClass('opacity-80');
   });
 
   it('exporta os lançamentos do período em CSV (separador ;, vírgula decimal, BOM)', async () => {
@@ -229,7 +233,7 @@ describe('ReportsPage', () => {
     expect(lines.some((l) => l.includes('Compra antiga'))).toBe(false);
     expect(lines.filter(Boolean)).toHaveLength(7);
 
-    await user.click(screen.getByRole('tab', { name: '12 meses' }));
+    await user.click(screen.getByRole('radio', { name: '12 meses' }));
     await user.click(screen.getByRole('button', { name: 'Exportar CSV' }));
     expect(await screen.findByText('CSV exportado com 7 lançamentos.')).toBeInTheDocument();
     expect(names[1]).toBe('patrimonius-lancamentos-2025-11-a-2026-10.csv');
@@ -242,5 +246,29 @@ describe('ReportsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Exportar CSV' }));
     expect(await screen.findByText('Não há lançamentos no período selecionado.')).toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('layout no celular: nenhuma aba alarga a página (grids com coluna base; tabelas roláveis contêm os sr-only)', async () => {
+    await seed();
+    const user = await renderPage();
+    const ready: Record<string, () => Promise<unknown>> = {
+      'Fechamento do mês': () => screen.findByRole('heading', { name: 'Fechamento de outubro de 2026' }),
+      Categorias: () => screen.findAllByRole('table'),
+      'Fluxo de caixa': () => screen.findAllByRole('table'),
+      '50/30/20': () => screen.findByRole('listitem', { name: 'Necessidades (50%)' }),
+      Comparativo: () => screen.findByRole('table', { name: /Comparativo de despesas por categoria/ }),
+    };
+    for (const [tab, waitReady] of Object.entries(ready)) {
+      await user.click(screen.getByRole('tab', { name: tab }));
+      await waitReady();
+      // Sem coluna base, o grid usa uma coluna "auto" que cresce até o min-content dos cards (50/30/20, fechamento).
+      expect({ tab, grids: describeElements(gridsWithoutBaseColumns(document.body)) }).toEqual({ tab, grids: [] });
+      // Sem ancestral posicionado, os "sr-only" de uma tabela larga (min-w-max) ficam fora do contêiner rolável e a
+      // página inteira rola para o lado (Comparativo: 618 px de largura num celular de 360 px).
+      expect({ tab, scrollers: describeElements(unpositionedScrollersWithSrOnly(document.body)) }).toEqual({
+        tab,
+        scrollers: [],
+      });
+    }
   });
 });

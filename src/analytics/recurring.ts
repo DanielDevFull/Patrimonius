@@ -1,4 +1,4 @@
-import { addDays, addMonths, isISODate, lastMonths, monthKey, parseISO } from '@/domain/dates';
+import { addDays, addMonths, daysInMonth, isISODate, lastMonths, makeISO, monthKey, parseISO } from '@/domain/dates';
 import { normalizeText } from '@/domain/text';
 import type { Frequency, ID, ISODate, MonthKey, RecurringRule, Timestamp, Transaction } from '@/domain/types';
 import type { FinanceData } from '@/domain/types';
@@ -13,10 +13,13 @@ import {
 } from './internal/common';
 import type { RecurringCandidate, UpcomingItem } from './types';
 
-/** Passo de cada frequência: em dias (semanal/quinzenal) ou em meses (demais). */
-const FREQUENCY_STEP: Record<Frequency, { days: number } | { months: number }> = {
+/**
+ * Passo de cada frequência: em dias (semanal), duas vezes por mês (quinzenal — como o salário/adiantamento e a
+ * diarista "de 15 em 15 dias" no Brasil) ou em meses (demais).
+ */
+const FREQUENCY_STEP: Record<Frequency, { days: number } | { months: number } | 'semimonthly'> = {
   semanal: { days: 7 },
-  quinzenal: { days: 14 },
+  quinzenal: 'semimonthly',
   mensal: { months: 1 },
   bimestral: { months: 2 },
   trimestral: { months: 3 },
@@ -28,17 +31,33 @@ const FREQUENCY_STEP: Record<Frequency, { days: number } | { months: number }> =
 const MAX_OCCURRENCES = 500;
 
 /**
+ * Dias do mês de uma regra quinzenal com dia âncora `anchor`: o par (d, d + 15) que contém a âncora.
+ * Ex.: âncora 5 ou 20 => dias 5 e 20; âncora 15 ou 30 => 15 e 30; âncora 31 => 16 e 31.
+ */
+function semimonthlyDays(anchor: number): [number, number] {
+  const first = anchor > 15 ? anchor - 15 : anchor;
+  return [first, first + 15];
+}
+
+/**
  * Próxima data após `date` segundo a frequência.
- * semanal: +7 dias; quinzenal: +14 dias; mensal/bimestral/trimestral/semestral/anual: +1/2/3/6/12 meses
- * preservando `anchorDay` (dia preferido; limitado ao último dia do mês). Se anchorDay omitido usa o dia de `date`.
- * Um anchorDay fora de 1..31 é limitado a esse intervalo.
+ * semanal: +7 dias; quinzenal: duas vezes por mês, no dia âncora e 15 dias depois/antes (ex.: 5 e 20; 15 e 30 — o
+ * segundo dia limitado ao último dia do mês: 15 e 28 em fevereiro), sempre 24 ocorrências por ano;
+ * mensal/bimestral/trimestral/semestral/anual: +1/2/3/6/12 meses preservando `anchorDay` (dia preferido; limitado ao
+ * último dia do mês). Se anchorDay omitido usa o dia de `date`. Um anchorDay fora de 1..31 é limitado a esse intervalo.
  */
 export function nextOccurrence(date: ISODate, frequency: Frequency, anchorDay?: number): ISODate {
   const step = FREQUENCY_STEP[frequency];
-  if ('days' in step) return addDays(date, step.days);
+  if (step !== 'semimonthly' && 'days' in step) return addDays(date, step.days);
   const anchor =
     anchorDay === undefined ? parseISO(date).day : Math.min(31, Math.max(1, Math.floor(anchorDay)));
-  return addMonths(date, step.months, anchor);
+  if (step !== 'semimonthly') return addMonths(date, step.months, anchor);
+  const [first, second] = semimonthlyDays(anchor);
+  const { year, month, day } = parseISO(date);
+  if (day < first) return makeISO(year, month, first);
+  const secondThisMonth = Math.min(second, daysInMonth(year, month));
+  if (day < secondThisMonth) return makeISO(year, month, secondThisMonth);
+  return addMonths(makeISO(year, month, 1), 1, first);
 }
 
 /** Dia âncora da regra (dia de startDate; se startDate for inválida, o dia de nextDate). */

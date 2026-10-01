@@ -45,7 +45,7 @@ export function ForecastCard({ forecast, hasAccounts, className }: ForecastCardP
           />
         ) : (
           <>
-            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
                   Saldo previsto no fim do mês

@@ -79,11 +79,14 @@ function TransactionConfirmCard({ action, index, state, data, today, handlers }:
   const presetTo = draft.type === 'transferencia' ? valid(draft.toAccountId) : '';
   const [fromChoice, setFromChoice] = useState<string>(presetFrom);
   const [toChoice, setToChoice] = useState<string>(presetTo);
-  const fromId = valid(fromChoice || null);
-  const toId = valid(toChoice || null);
-  const fromAccount = accounts.find((a) => a.id === fromId);
-  const toAccount = accounts.find((a) => a.id === toId);
   const isTransfer = draft.type === 'transferencia';
+  // Registrado: o rascunho já traz as contas gravadas (inclusive as trocadas em "Editar"); a escolha local não vale mais.
+  const saved = state === 'done' && !!draft.accountId;
+  const fromId = saved ? (draft.accountId ?? '') : valid(fromChoice || null);
+  const toId = saved ? (isTransfer ? (draft.toAccountId ?? '') : '') : valid(toChoice || null);
+  const shownAccounts = saved ? data.accounts : accounts;
+  const fromAccount = shownAccounts.find((a) => a.id === fromId);
+  const toAccount = shownAccounts.find((a) => a.id === toId);
   const category = isTransfer ? undefined : data.categories.find((c) => c.id === draft.categoryId && c.kind === draft.type);
   const installments = Math.max(1, draft.installments);
   const firstInstallment = installments > 1 ? splitCents(draft.amount, installments)[0] : draft.amount;

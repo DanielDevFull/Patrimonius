@@ -126,6 +126,32 @@ describe('AccountsPage', () => {
     expect(card.getByText(/Fecha dia 5/)).toHaveTextContent('Fecha dia 5 (05 nov) · Vence dia 20 (20 out)');
   });
 
+  it('limite do cartão desconta as parcelas futuras (como o Pat); a fatura atual mostra só as pagas', async () => {
+    const cartao = await seedAccount('Nubank', { type: 'cartao_credito', icon: '💳', creditLimit: 1000000 });
+    await addTransaction({
+      type: 'despesa',
+      amount: 500000,
+      date: '2026-10-15',
+      description: 'Notebook',
+      categoryId: CATEGORY_IDS.compras,
+      accountId: cartao.id,
+      installments: 10,
+    });
+    await renderPage();
+
+    const card = accountCard('Nubank');
+    expect(await card.findByText(/^Usado/)).toHaveTextContent('Usado R$ 5.000,00 de R$ 10.000,00');
+    expect(card.getByText(/Disponível/)).toHaveTextContent('Disponível R$ 5.000,00');
+    expect(card.getByRole('progressbar', { name: 'Limite usado de Nubank' })).toHaveAttribute(
+      'aria-valuenow',
+      '50',
+    );
+    expect(card.getByText(/O limite usado inclui/)).toHaveTextContent(
+      'O limite usado inclui R$ 4.500,00 em parcelas e lançamentos futuros.',
+    );
+    expect(card.getByText('Fatura atual').nextElementSibling).toHaveTextContent('R$ 500,00');
+  });
+
   it('“Pagar fatura” abre transferência para o cartão com o valor da fatura', async () => {
     const banco = await seedAccount('Banco', { initialBalance: 200000 });
     const cartao = await seedAccount('Cartão', { type: 'cartao_credito', initialBalance: -45678 });
@@ -134,7 +160,7 @@ describe('AccountsPage', () => {
 
     await screen.findByLabelText('Valor');
     const dialog = within(screen.getByRole('dialog', { name: 'Novo lançamento' }));
-    expect(dialog.getByRole('tab', { name: 'Transferência' })).toHaveAttribute('aria-selected', 'true');
+    expect(dialog.getByRole('radio', { name: 'Transferência' })).toBeChecked();
     expect(dialog.getByLabelText('Valor')).toHaveValue('456,78');
     expect(dialog.getByLabelText('De (origem)')).toHaveValue(banco.id);
     expect(dialog.getByLabelText('Para (destino)')).toHaveValue(cartao.id);
@@ -212,6 +238,39 @@ describe('AccountsPage', () => {
     });
   });
 
+  it('“Ajustar saldo” do cartão pede a fatura positiva, como aparece na tela (sem dobrar o valor)', async () => {
+    const cartao = await seedAccount('Cartão', {
+      type: 'cartao_credito',
+      icon: '💳',
+      initialBalance: -138384,
+    });
+    const user = await renderPage();
+    await user.click(accountCard('Cartão').getByRole('button', { name: 'Ajustar saldo de Cartão' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Ajustar saldo' }));
+    expect(dialog.getByText(/Fatura em aberto no app hoje/)).toHaveTextContent('R$ 1.383,84');
+
+    const input = dialog.getByLabelText('Fatura em aberto hoje');
+    await user.type(input, '1.383,84');
+    expect(dialog.getByText('O saldo já confere. Nenhum ajuste é necessário.')).toBeInTheDocument();
+    await user.clear(input);
+    await user.type(input, '1.400');
+    expect(dialog.getByText(/Será criada uma despesa de ajuste/)).toHaveTextContent('R$ 16,16');
+    await user.click(dialog.getByRole('button', { name: 'Ajustar' }));
+    await waitFor(async () => expect(await db.transactions.count()).toBe(1));
+    const [adj] = await db.transactions.toArray();
+    expect(adj).toMatchObject({ type: 'despesa', amount: 1616, accountId: cartao.id });
+  });
+
+  it('“Ajustar saldo” do cartão com crédito a favor vira saldo positivo', async () => {
+    await seedAccount('Cartão', { type: 'cartao_credito', icon: '💳', initialBalance: -10000 });
+    const user = await renderPage();
+    await user.click(accountCard('Cartão').getByRole('button', { name: 'Ajustar saldo de Cartão' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Ajustar saldo' }));
+    await user.click(dialog.getByRole('switch', { name: /Tenho crédito no cartão/ }));
+    await user.type(dialog.getByLabelText('Crédito a favor hoje'), '50');
+    expect(dialog.getByText(/Será criada uma receita de ajuste/)).toHaveTextContent('R$ 150,00');
+  });
+
   it('excluir conta sem uso apaga; com lançamentos arquiva e explica; arquivadas podem ser reativadas', async () => {
     await seedAccount('Vazia');
     const usada = await seedAccount('Usada', { initialBalance: 5000 });
@@ -238,11 +297,11 @@ describe('AccountsPage', () => {
     });
     const user = await renderPage();
 
-    async function deleteAccount(name: string) {
+    async function deleteAccount(name: string, confirmLabel = 'Excluir') {
       await user.click(accountCard(name).getByRole('button', { name: `Ações da conta ${name}` }));
       await user.click(screen.getByRole('menuitem', { name: 'Excluir ou arquivar' }));
       const confirm = await screen.findByRole('dialog', { name: `Excluir a conta “${name}”?` });
-      await user.click(within(confirm).getByRole('button', { name: 'Excluir' }));
+      await user.click(within(confirm).getByRole('button', { name: confirmLabel }));
     }
 
     await deleteAccount('Vazia');
@@ -250,7 +309,8 @@ describe('AccountsPage', () => {
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Vazia' })).not.toBeInTheDocument());
     expect(await db.accounts.count()).toBe(2);
 
-    await deleteAccount('Usada');
+    // “Usada” ainda tem saldo (R$ 40,00): o aviso explica que ele sai dos totais.
+    await deleteAccount('Usada', 'Arquivar mesmo assim');
     expect(await screen.findByText(/por isso foi arquivada/)).toBeInTheDocument();
     await waitFor(async () => expect((await db.accounts.get(usada.id))?.archived).toBe(true));
     await deleteAccount('Com regra');
@@ -264,6 +324,61 @@ describe('AccountsPage', () => {
     await user.click(accountCard('Usada').getByRole('button', { name: 'Reativar' }));
     await waitFor(async () => expect((await db.accounts.get(usada.id))?.archived).toBe(false));
     expect(await screen.findByText('Conta reativada.')).toBeInTheDocument();
+  });
+
+  it('arquivar cartão com fatura e parcelas futuras avisa antes e mostra o saldo que ficou fora dos totais', async () => {
+    await seedAccount('Banco', { initialBalance: 200000 });
+    const cartao = await seedAccount('Cartão', { type: 'cartao_credito', icon: '💳', creditLimit: 500000 });
+    await addTransaction({
+      type: 'despesa',
+      amount: 150000,
+      date: '2026-10-10',
+      description: 'Fone',
+      categoryId: CATEGORY_IDS.compras,
+      accountId: cartao.id,
+      installments: 3,
+    });
+    const user = await renderPage();
+    const totals = await screen.findByRole('region', { name: 'Totais' });
+    expect(within(totals).getByText('R$ 500,00')).toBeInTheDocument(); // fatura atual (1ª parcela)
+
+    async function openRemoval() {
+      await user.click(accountCard('Cartão').getByRole('button', { name: 'Ações da conta Cartão' }));
+      await user.click(screen.getByRole('menuitem', { name: 'Excluir ou arquivar' }));
+      return within(await screen.findByRole('dialog', { name: 'Excluir a conta “Cartão”?' }));
+    }
+
+    let dialog = await openRemoval();
+    expect(dialog.getByText(/Esta conta tem fatura em aberto/)).toHaveTextContent(
+      'Esta conta tem fatura em aberto de R$ 500,00 e 2 lançamentos futuros ou pendentes (como parcelas).',
+    );
+    expect(dialog.getByText(/será arquivada/)).toHaveTextContent(/continua no patrimônio líquido/);
+    // Oferece pagar a fatura antes de arquivar.
+    await user.click(dialog.getByRole('button', { name: 'Pagar a fatura antes' }));
+    // o formulário mostra um spinner enquanto carrega os dados (o diálogo é recriado em seguida)
+    await screen.findByLabelText('Valor');
+    const transfer = within(screen.getByRole('dialog', { name: 'Novo lançamento' }));
+    expect(transfer.getByLabelText('Valor')).toHaveValue('500,00');
+    await user.click(transfer.getByRole('button', { name: 'Cancelar' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    dialog = await openRemoval();
+    await user.click(dialog.getByRole('button', { name: 'Arquivar mesmo assim' }));
+    await waitFor(async () => expect((await db.accounts.get(cartao.id))?.archived).toBe(true));
+    expect(await screen.findByText(/Conta arquivada com saldo/)).toHaveTextContent(
+      'Conta arquivada com saldo: -R$ 500,00 (fora dos totais acima, mas ainda conta no patrimônio líquido).',
+    );
+    expect(within(totals).getByText('Nenhuma fatura em aberto')).toBeInTheDocument();
+  });
+
+  it('conta zerada e sem lançamentos futuros usa a confirmação simples', async () => {
+    await seedAccount('Zerada');
+    const user = await renderPage();
+    await user.click(accountCard('Zerada').getByRole('button', { name: 'Ações da conta Zerada' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Excluir ou arquivar' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Excluir a conta “Zerada”?' }));
+    expect(dialog.getByText(/para preservar o seu histórico/)).toBeInTheDocument();
+    expect(dialog.queryByRole('button', { name: 'Arquivar mesmo assim' })).not.toBeInTheDocument();
   });
 
   it('edita conta de cartão validando os dias', async () => {

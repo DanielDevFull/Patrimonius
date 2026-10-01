@@ -10,6 +10,7 @@ import {
 import type { AccountType, Cents, FinanceData, ID, ISODate, MonthKey, Transaction } from '@/domain/types';
 import { occurrencesBetween } from './recurring';
 import { addTo, isFlow, materializedKeys, occurrenceKey } from './internal/common';
+import { expenseTrackingStart, monthCoverage } from './summary';
 import type { CashflowForecast, ForecastPoint } from './types';
 
 /** Meses completos usados para estimar o gasto variável diário. */
@@ -19,7 +20,8 @@ type Movement = Pick<Transaction, 'type' | 'amount' | 'accountId' | 'toAccountId
 
 /**
  * Previsão de fluxo de caixa de `today` até `until` (padrão: último dia do mês de today).
- * Considera as "contas de caixa": contas NÃO arquivadas cujo tipo NÃO é 'investimento'
+ * Considera as "contas de caixa": contas NÃO arquivadas, incluídas no patrimônio (includeInNetWorth — dinheiro de
+ * terceiros, como a conta da empresa, não é do usuário) e cujo tipo NÃO é 'investimento'
  * (corrente, poupança, carteira, outro e cartão de crédito — cujo saldo negativo é dinheiro a pagar).
  * - currentBalance: soma dos saldos das contas de caixa (só 'pago', date <= today).
  * - Entram como esperados: lançamentos 'pendente' com date <= until (vencidos contam como se fossem hoje)
@@ -35,8 +37,11 @@ type Movement = Pick<Transaction, 'type' | 'amount' | 'accountId' | 'toAccountId
  * - `until` anterior a `today` é tratado como `today` (um único ponto).
  * - Ocorrências de recorrência que já têm lançamento (mesmo recurringId e data) não são contadas de novo.
  * - Média diária do gasto variável = total desses gastos ÷ dias dos meses (entre os 3 completos) que tiveram
- *   algum lançamento — quem começou a usar o app há 1 mês não tem a média diluída por meses vazios.
- *   Despesas lançadas em contas de investimento não entram (não saem do caixa).
+ *   algum lançamento — quem começou a usar o app há 1 mês não tem a média diluída por meses vazios. No mês em que o
+ *   registro de despesas começou (expenseTrackingStart), contam só os dias cobertos (monthCoverage: começo até o
+ *   dia 7 conta como mês cheio; mínimo de 7 dias): quem começou no dia 20 não tem o gasto diário diluído pelos 19
+ *   dias sem registro.
+ *   Despesas lançadas em contas de investimento ou fora das contas de caixa não entram (não saem do caixa).
  * - O ponto de `today` já inclui os pendentes vencidos/de hoje e as ocorrências de hoje; o gasto variável acumulado
  *   no dia i (1..N) é round(total × i / N), então o último ponto é exatamente projectedEndBalance.
  * - lowestPoint é o primeiro dia com o menor saldo; willGoNegative = lowestPoint.balance < 0.
@@ -50,7 +55,7 @@ export function cashflowForecast(data: FinanceData, today: ISODate, until?: ISOD
   let currentBalance: Cents = 0;
   for (const account of data.accounts) {
     accountTypes.set(account.id, account.type);
-    if (account.archived || account.type === 'investimento') continue;
+    if (account.archived || account.type === 'investimento' || !account.includeInNetWorth) continue;
     cashIds.add(account.id);
     currentBalance += account.initialBalance;
   }
@@ -109,11 +114,12 @@ export function cashflowForecast(data: FinanceData, today: ISODate, until?: ISOD
     if (!history.has(key)) continue;
     activeMonths.add(key);
     if (tx.type !== 'despesa' || tx.recurringId !== null || tx.installment !== null) continue;
-    if (accountTypes.get(tx.accountId) === 'investimento') continue;
+    if (accountTypes.get(tx.accountId) === 'investimento' || !cashIds.has(tx.accountId)) continue;
     variableTotal += tx.amount;
   }
+  const trackingStart = expenseTrackingStart(data);
   let historyDays = 0;
-  for (const m of activeMonths) historyDays += daysInMonthKey(m);
+  for (const m of activeMonths) historyDays += Math.round(daysInMonthKey(m) * monthCoverage(m, trackingStart));
   const remainingDays = diffDays(today, end);
   const projectedVariableSpending =
     historyDays > 0 && remainingDays > 0 ? Math.round((variableTotal / historyDays) * remainingDays) : 0;

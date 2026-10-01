@@ -48,7 +48,7 @@ export function HealthCard({ report, className }: { report: HealthReport; classN
             <li key={c.key} title={c.tip}>
               <div className="flex items-baseline justify-between gap-2 text-xs">
                 <span className="font-medium text-slate-700 dark:text-slate-200">
-                  {c.label} <span className="font-normal text-slate-400">· peso {c.weight}</span>
+                  {c.label} <span className="font-normal text-slate-500 dark:text-slate-400">· peso {c.weight}</span>
                 </span>
                 <span className="tabular text-slate-500 dark:text-slate-400">{Math.round(c.score)}/100</span>
               </div>

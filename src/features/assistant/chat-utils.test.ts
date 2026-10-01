@@ -7,6 +7,7 @@ import {
   actionState,
   budgetDoneReply,
   contributionDoneReply,
+  draftFromSaved,
   draftToInitial,
   draftToInput,
   EXAMPLE_GROUPS,
@@ -15,8 +16,10 @@ import {
   isInternalPath,
   makePayload,
   readAgentPayload,
+  splitUserMoneyText,
   transactionDoneReply,
   withActionState,
+  withTransactionDraft,
 } from './chat-utils';
 
 const TODAY = '2026-10-15';
@@ -199,6 +202,106 @@ describe('draftToInput / draftToInitial', () => {
     expect(draftToInitial(DRAFT, { accountId: 'a1' }).accountId).toBe('a1');
     const transfer = draftToInitial({ ...DRAFT, type: 'transferencia', accountId: 'a1', toAccountId: null }, { toAccountId: 'a2' });
     expect(transfer).toMatchObject({ categoryId: null, accountId: 'a1', toAccountId: 'a2' });
+  });
+});
+
+describe('rascunho salvo (card "Registrado")', () => {
+  it('draftFromSaved: lançamento simples reflete os valores gravados (ex.: editados no formulário)', () => {
+    const tx = makeTransaction({
+      accountId: 'acc-nu',
+      amount: 5500,
+      description: 'Feira',
+      categoryId: CATEGORY_IDS.mercado,
+      date: '2026-10-14',
+      status: 'pendente',
+    });
+    expect(draftFromSaved([tx])).toEqual({
+      type: 'despesa',
+      amount: 5500,
+      date: '2026-10-14',
+      description: 'Feira',
+      categoryId: CATEGORY_IDS.mercado,
+      accountId: 'acc-nu',
+      toAccountId: null,
+      status: 'pendente',
+      installments: 1,
+    });
+    expect(draftFromSaved([])).toBeNull();
+  });
+
+  it('draftFromSaved: parcelado soma o grupo, usa a 1ª parcela e tira o sufixo (1/N)', () => {
+    const txs = [3, 1, 2].map((n) =>
+      makeTransaction({
+        accountId: 'acc-1',
+        amount: n === 1 ? 10001 : 10000,
+        description: `Tênis (${n}/3)`,
+        date: `2026-${String(9 + n).padStart(2, '0')}-15`,
+        status: n === 1 ? 'pago' : 'pendente',
+        installment: { groupId: 'g', number: n, total: 3 },
+      }),
+    );
+    expect(draftFromSaved(txs)).toMatchObject({
+      amount: 30001,
+      date: '2026-10-15',
+      description: 'Tênis',
+      status: 'pago',
+      installments: 3,
+    });
+    // Sem parcela, '(1/2)' é parte da descrição e fica.
+    expect(draftFromSaved([makeTransaction({ accountId: 'acc-1', description: 'Rateio (1/2)' })])?.description).toBe('Rateio (1/2)');
+  });
+
+  it('draftFromSaved: transferência mantém origem e destino, sem categoria', () => {
+    const tx = makeTransaction({ type: 'transferencia', accountId: 'a1', toAccountId: 'a2', categoryId: null, amount: 100 });
+    expect(draftFromSaved([tx])).toMatchObject({ type: 'transferencia', accountId: 'a1', toAccountId: 'a2', categoryId: null });
+  });
+
+  it('withTransactionDraft troca só o rascunho da ação indicada (e ignora ações que não são lançamento)', () => {
+    const payload = withActionState(
+      makePayload(baseReply({ actions: [...baseReply().actions, { type: 'navigate', label: 'Ver', to: '/x' }] })),
+      0,
+      'done',
+    );
+    const saved: TransactionDraft = { ...DRAFT, amount: 5500, accountId: 'acc-1' };
+    const next = withTransactionDraft(payload, 0, saved);
+    expect(next.done).toEqual([0]);
+    expect(next.reply.actions[0]).toEqual({ type: 'create_transaction', label: 'Registrar despesa', draft: saved });
+    expect(next.reply.actions[1]).toBe(payload.reply.actions[1]);
+    expect(payload.reply.actions[0]).toMatchObject({ draft: DRAFT });
+    expect(withTransactionDraft(payload, 1, saved)).toBe(payload);
+    // Sobrevive à leitura do banco.
+    const read = readAgentPayload(JSON.parse(JSON.stringify(next)));
+    expect(read?.reply.actions[0]).toMatchObject({ draft: { amount: 5500, accountId: 'acc-1' } });
+    expect(read?.done).toEqual([0]);
+  });
+});
+
+describe('splitUserMoneyText (modo "ocultar valores" em texto livre)', () => {
+  const money = (text: string) => splitUserMoneyText(text).filter((p) => p.money).map((p) => p.text);
+
+  it('marca valores digitados sem "R$"', () => {
+    expect(money('gastei 1.250 no aluguel')).toEqual(['1.250']);
+    expect(money('gastei 1.234,56 no mercado')).toEqual(['1.234,56']);
+    expect(money('recebi 9650 de salário')).toEqual(['9650']);
+    expect(money('criar meta viagem de 6 mil em 12 meses')).toEqual(['6 mil']);
+    expect(money('Guardei 200 na meta Carro')).toEqual(['200']);
+    expect(money('paguei cem reais de luz')).toEqual(['cem reais']);
+    expect(money('Posso gastar R$ 1,2 mi?')).toEqual(['R$ 1,2 mi']);
+  });
+
+  it('não marca datas, parcelas, prazos e percentuais', () => {
+    expect(money('comprei tv de 3000 em 10x dia 15/10')).toEqual(['3000']);
+    expect(money('Quanto gastei em setembro de 2026?')).toEqual([]);
+    expect(money('guardar 10% do salário')).toEqual([]);
+    expect(splitUserMoneyText('Qual meu saldo?')).toEqual([{ text: 'Qual meu saldo?', money: false }]);
+    expect(splitUserMoneyText('')).toEqual([]);
+  });
+
+  it('juntar os trechos devolve o texto original (acentos e emojis preservados)', () => {
+    for (const text of ['Ação: gastei R$ 45,90 no 🍕 e 2k no Pão de Açúcar', '-R$ 10,00 e 50 reais', 'linha 1\nlinha 2']) {
+      expect(splitUserMoneyText(text).map((p) => p.text).join('')).toBe(text);
+    }
+    expect(money('Ação: gastei R$ 45,90 no 🍕 e 2k no Pão de Açúcar')).toEqual(['R$ 45,90', '2k']);
   });
 });
 

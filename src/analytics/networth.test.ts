@@ -90,8 +90,10 @@ const data = makeData({
     makeValuation({ assetId: 'car', value: 6000000, date: '2026-08-20' }),
   ],
   debts: [
-    makeDebt({ id: 'fin', name: 'Financiamento', balance: 10000000, balanceDate: '2026-01-01' }),
-    makeDebt({ id: 'ok', name: 'Quitada', balance: 500000, status: 'quitada' }),
+    // Sem juros: aqui só importa a composição (a amortização com juros é testada em debts.test.ts).
+    makeDebt({ id: 'fin', name: 'Financiamento', balance: 10000000, balanceDate: '2026-01-01', interestRate: 0 }),
+    // Marcada como quitada à mão em janeiro (sem pagamentos): não conta a partir daí.
+    makeDebt({ id: 'ok', name: 'Quitada', balance: 500000, status: 'quitada', updatedAt: '2026-01-15T12:00:00.000Z' }),
   ],
   debtPayments: [
     makeDebtPayment({ debtId: 'fin', amount: 200000, date: '2026-09-10' }),
@@ -127,11 +129,12 @@ describe('netWorth', () => {
     expect(nw.netWorth).toBe(730000 + 48500000 - 70000 - 9800000);
   });
 
-  it('usa a avaliação vigente na data e o valor de aquisição antes de qualquer avaliação', () => {
+  it('usa a avaliação vigente na data e, antes da primeira avaliação, o valor dela', () => {
     const jun2023 = netWorth(data, '2023-06-30');
-    // Apartamento: sem avaliação até 2023 => valor de aquisição; carro ainda não comprado => 0.
+    // Apartamento: sem avaliação até 2023 => valor da 1ª avaliação (350.000,00), não o de aquisição;
+    // carro ainda não comprado => 0.
     expect(jun2023.byAssetType).toEqual([
-      { type: 'imovel', label: 'Imóvel', total: 30000000 },
+      { type: 'imovel', label: 'Imóvel', total: 35000000 },
       { type: 'veiculo', label: 'Veículo', total: 1500000 },
     ]);
     const jul2026 = netWorth(data, '2026-07-31');
@@ -185,5 +188,64 @@ describe('netWorthHistory', () => {
 
   it('count <= 0 => lista vazia', () => {
     expect(netWorthHistory(data, '2026-10', 0)).toEqual([]);
+  });
+});
+
+describe('netWorthHistory — o passado não é reescrito', () => {
+  it('quitar uma dívida não derruba o patrimônio dos meses anteriores', () => {
+    // Conta com R$ 20.000,00 e dívida de R$ 10.000,00 (saldo em 01/05), quitada com pagamento em 15/09.
+    const quitada = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 2000000 })],
+      transactions: [makeTransaction({ accountId: 'cc', amount: 1000000, date: '2026-09-15', categoryId: 'cat-dividas' })],
+      debts: [makeDebt({ id: 'd', balance: 1000000, balanceDate: '2026-05-01', interestRate: 0, status: 'quitada' })],
+      debtPayments: [makeDebtPayment({ debtId: 'd', amount: 1000000, date: '2026-09-15' })],
+    });
+    // Antes: [20.000 ×4, 10.000, 10.000] — uma queda falsa em setembro.
+    expect(netWorthHistory(quitada, '2026-10', 6).map((p) => p.netWorth)).toEqual(Array(6).fill(1000000));
+  });
+
+  it('arquivar um bem vendido mantém o bem nos meses anteriores à venda', () => {
+    // Carro de R$ 50.000,00 avaliado em 01/05, vendido em 20/09 (receita de R$ 50.000,00) e arquivado.
+    const vendido = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 100000 })],
+      transactions: [
+        makeTransaction({ accountId: 'cc', type: 'receita', amount: 5000000, date: '2026-09-20', categoryId: 'cat-outros-receita' }),
+      ],
+      assets: [makeAsset({ id: 'car', value: 5000000, archived: true, archivedAt: '2026-09-20' })],
+      assetValuations: [makeValuation({ assetId: 'car', value: 5000000, date: '2026-05-01' })],
+    });
+    // Antes: [1.000 ×4, 51.000, 51.000] — uma alta falsa de R$ 50.000,00 em setembro.
+    expect(netWorthHistory(vendido, '2026-10', 6).map((p) => p.netWorth)).toEqual(Array(6).fill(5100000));
+    expect(netWorth(vendido, '2026-09-19').assetsTotal).toBe(5000000);
+    expect(netWorth(vendido, '2026-09-20').assetsTotal).toBe(0);
+  });
+
+  it('bem arquivado antes de existir archivedAt (dados antigos) conta até a última avaliação', () => {
+    const antigo = makeData({
+      assets: [makeAsset({ id: 'old', value: 300000, archived: true })],
+      assetValuations: [makeValuation({ assetId: 'old', value: 300000, date: '2026-08-31' })],
+    });
+    expect(netWorthHistory(antigo, '2026-09', 2).map((p) => p.netWorth)).toEqual([300000, 0]);
+  });
+
+  it('bem cadastrado hoje com aquisição antiga não cria alta nem queda falsa no mês do cadastro', () => {
+    // Imóvel comprado em 2015 por R$ 300.000,00 e avaliado em R$ 500.000,00 no cadastro (10/10).
+    const imovel = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 100000 })],
+      assets: [
+        makeAsset({ id: 'ap', type: 'imovel', value: 50000000, acquisitionValue: 30000000, acquisitionDate: '2015-03-01' }),
+        // Carro de 2023 (R$ 70.000,00) que hoje vale R$ 60.000,00.
+        makeAsset({ id: 'car', value: 6000000, acquisitionValue: 7000000, acquisitionDate: '2023-03-15' }),
+      ],
+      assetValuations: [
+        makeValuation({ assetId: 'ap', value: 50000000, date: '2026-10-10' }),
+        makeValuation({ assetId: 'car', value: 6000000, date: '2026-10-10' }),
+      ],
+    });
+    // Antes: [371.000, 371.000, 561.000] (alta falsa de R$ 190.000,00).
+    expect(netWorthHistory(imovel, '2026-10', 3).map((p) => p.netWorth)).toEqual(Array(3).fill(56100000));
+    // Antes da aquisição o bem não existia.
+    expect(netWorth(imovel, '2023-01-31').assetsTotal).toBe(50000000);
+    expect(netWorth(imovel, '2014-12-31').assetsTotal).toBe(0);
   });
 });

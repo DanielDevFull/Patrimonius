@@ -99,6 +99,30 @@ describe('monthlyReport — situações', () => {
     expect(cardsOf(report.cards, 'stat')[2]).toMatchObject({ title: 'Resultado do mês', value: '-R$ 5.305,90', tone: 'negative' });
   });
 
+  it('investir mais do que a sobra não é "mês no vermelho" (aporte é poupança)', () => {
+    // Setembro: renda 5.000, moradia 3.000 e aporte de 2.500 em Investimentos e reserva.
+    const report = monthlyReport(
+      makeData({
+        accounts: [makeAccount({ id: 'cc', initialBalance: 1000000 })],
+        transactions: [
+          tx({ accountId: 'cc', type: 'receita', amount: 500000, date: '2026-09-05', categoryId: CATEGORY_IDS.salario }),
+          tx({ accountId: 'cc', amount: 300000, date: '2026-09-06', categoryId: CATEGORY_IDS.moradia }),
+          tx({ accountId: 'cc', amount: 250000, date: '2026-09-07', categoryId: CATEGORY_IDS.investimentos }),
+        ],
+      }),
+      '2026-09',
+      TODAY,
+    );
+    const text = report.paragraphs.join('\n');
+    expect(text).toContain('Sua taxa de poupança foi de 40%');
+    expect(text).toContain(
+      'Seus aportes em investimentos (R$ 2.500,00) passaram a sobra do mês em R$ 500,00 — a diferença saiu do saldo que você já tinha.',
+    );
+    expect(text).not.toContain('a mais do que ganhou');
+    // Antes: "Para outubro de 2026: o foco é voltar ao azul", junto com a poupança acima da meta.
+    expect(report.paragraphs[report.paragraphs.length - 1]).not.toContain('voltar ao azul');
+  });
+
   it('orçamento estourado aparece e vira a recomendação', () => {
     const report = reportFor('2026-09', {
       budgets: [
@@ -168,5 +192,54 @@ describe('monthlyReport — situações', () => {
   it('é determinístico e não altera a entrada', () => {
     const data = deepFreeze(makeScenario());
     expect(monthlyReport(data, '2026-09', TODAY)).toEqual(monthlyReport(data, '2026-09', TODAY));
+  });
+});
+
+describe('monthlyReport — regressões', () => {
+  it('mês futuro com parcelas agendadas não vira "fechamento" com sobra e recomendação', () => {
+    const data = makeScenario({
+      transactions: [
+        ...baseTransactions(),
+        tx({ amount: 35990, date: '2026-11-12', status: 'pendente', description: 'TV (6/10)', categoryId: CATEGORY_IDS.compras }),
+      ],
+    });
+    const report = monthlyReport(data, '2026-11', TODAY);
+    expect(report.paragraphs[0]).toBe(
+      'Novembro de 2026 ainda não começou. Quando o mês chegar, registre suas receitas e despesas e eu escrevo o fechamento.',
+    );
+    expect(report.paragraphs.join(' ')).toContain('Já estão agendados para novembro de 2026 R$ 359,90 em despesas');
+    expect(report.paragraphs.join(' ')).not.toContain('voltar ao azul');
+    expect(report.cards).toEqual([]);
+  });
+
+  it('fechamento parcial: "entraram" só conta o que já entrou; o resto é previsto', () => {
+    const data = makeScenario({
+      transactions: [
+        ...baseTransactions(),
+        tx({ type: 'receita', amount: 100000, date: '2026-10-25', status: 'pendente', description: 'Freela', categoryId: CATEGORY_IDS.rendaExtra }),
+      ],
+    });
+    const text = monthlyReport(data, '2026-10', TODAY).paragraphs.join('\n');
+    expect(text).toContain('Até agora, em outubro de 2026, entraram R$ 6.000,00 e saíram R$ 2.455,90');
+    expect(text).toContain('A taxa de poupança prevista para o mês é');
+    expect(text).not.toContain('Sua taxa de poupança foi');
+  });
+});
+
+describe('monthlyReport — sem meta de poupança (0% nas Configurações)', () => {
+  const noGoal = { ...makeScenario().settings, savingsRateTarget: 0 };
+
+  it('informa a taxa sem comparar com uma meta de 20% e não recomenda "chegar à meta"', () => {
+    const report = reportFor('2026-09', {
+      settings: noGoal,
+      transactions: [
+        ...baseTransactions(),
+        tx({ amount: 250000, date: '2026-09-21', description: 'Notebook', categoryId: CATEGORY_IDS.compras }),
+      ],
+    });
+    const text = report.paragraphs.join('\n');
+    expect(report.paragraphs[0]).toContain('Sua taxa de poupança foi de 11,6% (contando R$ 500,00 investidos).');
+    expect(text).not.toMatch(/meta de 20%/);
+    expect(report.paragraphs[report.paragraphs.length - 1]).not.toContain('separe R$ 505,90');
   });
 });

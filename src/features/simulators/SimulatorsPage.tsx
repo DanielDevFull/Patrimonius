@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router';
-import { PageHeader, SegmentedControl, Spinner } from '@/components/ui';
+import { PageHeader, SegmentedControl, segmentPanelId, segmentTabId, Spinner } from '@/components/ui';
 import { useFinanceData, useToday } from '@/db/hooks';
 import { AffordabilitySim } from './AffordabilitySim';
 import { CompoundInterestSim } from './CompoundInterestSim';
@@ -8,13 +8,15 @@ import { PayOrInvestSim } from './PayOrInvestSim';
 import { SIMULATOR_TABS, parseTab, type SimulatorTab } from './simulator-utils';
 import { TimeToGoalSim } from './TimeToGoalSim';
 
+/** Prefixo dos ids das abas/painel (aria-controls e aria-labelledby). */
+const SIMULATOR_TABS_ID = 'simuladores';
+
 /** Simuladores financeiros (aba atual em `?aba=`, para links diretos do agente). */
 export default function SimulatorsPage() {
   const data = useFinanceData();
   const today = useToday();
   const [params, setParams] = useSearchParams();
   const tab = parseTab(params.get('aba'));
-  const current = SIMULATOR_TABS.find((t) => t.value === tab) ?? SIMULATOR_TABS[0];
 
   function select(next: SimulatorTab) {
     setParams(
@@ -36,6 +38,7 @@ export default function SimulatorsPage() {
       <div className="-mx-4 mb-5 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">
         <SegmentedControl
           aria-label="Simuladores"
+          idPrefix={SIMULATOR_TABS_ID}
           options={SIMULATOR_TABS}
           value={tab}
           onChange={select}
@@ -46,7 +49,11 @@ export default function SimulatorsPage() {
       {!data ? (
         <Spinner />
       ) : (
-        <div role="tabpanel" aria-label={current.label}>
+        <div
+          role="tabpanel"
+          id={segmentPanelId(SIMULATOR_TABS_ID, tab)}
+          aria-labelledby={segmentTabId(SIMULATOR_TABS_ID, tab)}
+        >
           {tab === 'juros' && <CompoundInterestSim hideValues={data.settings.hideValues} />}
           {tab === 'tempo' && <TimeToGoalSim today={today} />}
           {tab === 'comprar' && <AffordabilitySim data={data} today={today} />}

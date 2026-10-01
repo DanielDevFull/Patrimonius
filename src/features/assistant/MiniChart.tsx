@@ -1,4 +1,4 @@
-import { useId, useSyncExternalStore } from 'react';
+import { useId } from 'react';
 import {
   Bar,
   BarChart,
@@ -13,8 +13,8 @@ import {
   YAxis,
   type TooltipPayload,
 } from 'recharts';
+import { useChartTheme, useHideValues } from '@/components/charts/theme';
 import { Money } from '@/components/ui';
-import { useSettings } from '@/db/hooks';
 import { COLOR_PALETTE } from '@/domain/defaults';
 import { formatBRLCompact, formatPercent } from '@/domain/money';
 
@@ -31,31 +31,6 @@ export interface MiniChartProps {
   data: MiniChartDatum[];
 }
 
-/**
- * Cores validadas (dataviz/validate_palette) contra as superfícies reais dos cards (branco e slate-900):
- * série única em azul, com passo próprio para o modo escuro. As pizzas usam as cores das próprias categorias
- * e sempre têm legenda com nome e valor (a identidade nunca depende só da cor).
- */
-const THEME = {
-  light: { surface: '#ffffff', grid: '#e2e8f0', axis: '#cbd5e1', tick: '#64748b', cursor: '#f1f5f9', series: '#2a78d6' },
-  dark: { surface: '#0f172a', grid: '#1e293b', axis: '#334155', tick: '#94a3b8', cursor: '#1e293b', series: '#3987e5' },
-};
-
-function subscribeTheme(onChange: () => void): () => void {
-  if (typeof MutationObserver === 'undefined') return () => {};
-  const observer = new MutationObserver(onChange);
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-  return () => observer.disconnect();
-}
-
-function useIsDark(): boolean {
-  return useSyncExternalStore(
-    subscribeTheme,
-    () => document.documentElement.classList.contains('dark'),
-    () => false,
-  );
-}
-
 function ChartTip({ active, payload, label }: { active?: boolean; payload?: TooltipPayload; label?: string | number }) {
   if (!active || !payload?.length) return null;
   const entry = payload[0];
@@ -69,11 +44,15 @@ function ChartTip({ active, payload, label }: { active?: boolean; payload?: Tool
   );
 }
 
-/** Gráfico pequeno das respostas do agente (barras de uma série ou pizza por categoria). Valores em centavos. */
+/**
+ * Gráfico pequeno das respostas do agente (barras de uma série ou pizza por categoria). Valores em centavos.
+ * Cores do tema compartilhado (@/components/charts/theme): série única na cor do saldo (azul), com passo próprio
+ * para o modo escuro. As pizzas usam as cores das próprias categorias e sempre têm legenda com nome e valor
+ * (a identidade nunca depende só da cor).
+ */
 export function MiniChart({ kind, title, data }: MiniChartProps) {
-  const dark = useIsDark();
-  const hideValues = useSettings()?.hideValues ?? false;
-  const t = dark ? THEME.dark : THEME.light;
+  const t = useChartTheme();
+  const hideValues = useHideValues();
   const tableId = useId();
 
   if (kind === 'pie') {
@@ -123,7 +102,7 @@ export function MiniChart({ kind, title, data }: MiniChartProps) {
     );
   }
 
-  const rows = data.map((d) => ({ ...d, fill: d.color ?? t.series }));
+  const rows = data.map((d) => ({ ...d, fill: d.color ?? t.balance }));
   const hasNegative = rows.some((r) => r.value < 0);
   return (
     <div>

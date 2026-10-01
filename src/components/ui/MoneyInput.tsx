@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatDecimal, parseMoney } from '@/domain/money';
 import type { Cents } from '@/domain/types';
 import { cn } from './cn';
@@ -33,19 +33,25 @@ export function MoneyInput({
   ...rest
 }: MoneyInputProps) {
   const [text, setText] = useState(() => (value == null ? '' : formatDecimal(value)));
-  const [focused, setFocused] = useState(false);
+  /** Último valor que o próprio campo emitiu (ou já refletido no texto). */
+  const lastValue = useRef<Cents | null>(value);
 
-  // Sincroniza quando o valor muda externamente (ex.: reset do formulário).
+  const emit = (v: Cents | null) => {
+    lastValue.current = v;
+    onChange(v);
+  };
+
+  // Sincroniza o texto só quando o valor muda DE FORA (ex.: reset do "Salvar e novo", edição carregada). O null que o
+  // próprio campo emite num trecho ainda incompleto ('2 m' de '2 mil') não apaga o que o usuário está digitando.
   useEffect(() => {
-    // Com foco, só sincroniza quando o valor é limpo externamente (ex.: "Salvar e novo").
-    if (focused && value !== null) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- sincronização intencional com prop externa
+    if (value === lastValue.current) return;
+    lastValue.current = value;
     setText(value == null ? '' : formatDecimal(value));
-  }, [value, focused]);
+  }, [value]);
 
   return (
     <div className={cn('relative', className)}>
-      <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-slate-500">R$</span>
+      <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-slate-500 dark:text-slate-400">R$</span>
       <input
         id={id}
         inputMode="decimal"
@@ -56,20 +62,18 @@ export function MoneyInput({
         aria-label={rest['aria-label']}
         className={cn(controlClass, 'tabular pl-10 text-right')}
         value={text}
-        onFocus={() => setFocused(true)}
         onChange={(e) => {
           const raw = e.target.value;
           setText(raw);
           const parsed = parseMoney(raw);
-          if (parsed == null) onChange(null);
-          else onChange(allowNegative ? parsed : Math.abs(parsed));
+          if (parsed == null) emit(null);
+          else emit(allowNegative ? parsed : Math.abs(parsed));
         }}
         onBlur={() => {
-          setFocused(false);
           const parsed = parseMoney(text);
           if (parsed == null) {
             setText('');
-            onChange(null);
+            emit(null);
           } else {
             const v = allowNegative ? parsed : Math.abs(parsed);
             setText(formatDecimal(v));

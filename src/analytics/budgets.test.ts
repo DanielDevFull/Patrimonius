@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildDefaultCategories } from '@/domain/defaults';
 import { TEST_NOW, makeBudget, makeTransaction } from '@/test/factories';
-import { budgetOverview, budgetStatuses, resolveBudget, suggestBudgets } from './budgets';
+import { budgetOverview, budgetStatuses, categorySpent, resolveBudget, suggestBudgets } from './budgets';
 
 const acc = 'chk';
 const categories = buildDefaultCategories(TEST_NOW).map((c) =>
@@ -129,7 +129,7 @@ describe('budgetStatuses', () => {
       date: '2026-10-01',
       categoryId: 'cat-mercado',
     });
-    expect(budgetStatuses(budget, [tx], categories, '2026-10', '2026-10-01')[0].projected).toBe(31000);
+    expect(budgetStatuses(budget, [tx], categories, '2026-10', '2026-10-07')[0].projected).toBe(4429); // 1000 / 7 × 31
     expect(budgetStatuses(budget, [tx], categories, '2026-10', '2026-10-31')[0].projected).toBe(1000);
     // fevereiro de ano bissexto: 29 dias
     const feb = makeTransaction({
@@ -138,7 +138,31 @@ describe('budgetStatuses', () => {
       date: '2028-02-02',
       categoryId: 'cat-mercado',
     });
-    expect(budgetStatuses(budget, [feb], categories, '2028-02', '2028-02-02')[0].projected).toBe(14500);
+    expect(budgetStatuses(budget, [feb], categories, '2028-02', '2028-02-10')[0].projected).toBe(2900);
+  });
+
+  it('nos primeiros 6 dias do mês não extrapola o ritmo (sem alerta falso)', () => {
+    // Mercado de R$ 600,00 com 2 compras de R$ 97,30 no dia 1º.
+    const mercado = [makeBudget({ categoryId: 'cat-mercado', amount: 60000, month: null })];
+    const compras = [9730, 9730].map((amount) =>
+      makeTransaction({ accountId: acc, amount, date: '2026-10-01', categoryId: 'cat-mercado' }),
+    );
+    const [day1] = budgetStatuses(mercado, compras, categories, '2026-10', '2026-10-01');
+    // Antes: projected 603.260 (R$ 6.032,60) e status 'alerta' com 32,4% de uso.
+    expect(day1).toMatchObject({ spent: 19460, projected: 19460, status: 'ok' });
+
+    // Transporte de R$ 850,00 com um Uber de R$ 60,00 no dia 1º (antes: projeção de R$ 1.860,00 e 'alerta').
+    const transporte = [makeBudget({ categoryId: 'cat-transporte', amount: 85000, month: null })];
+    const uber = makeTransaction({ accountId: acc, amount: 6000, date: '2026-10-01', categoryId: 'cat-transporte' });
+    expect(budgetStatuses(transporte, [uber], categories, '2026-10', '2026-10-06')[0]).toMatchObject({
+      projected: 6000,
+      status: 'ok',
+    });
+    // A partir do 7º dia o ritmo volta a valer: 6.000 / 7 × 31 = 26.571 (ainda dentro do limite).
+    expect(budgetStatuses(transporte, [uber], categories, '2026-10', '2026-10-07')[0].projected).toBe(26571);
+    // Uso alto já no início do mês continua em alerta (pelo percentual).
+    const alto = makeTransaction({ accountId: acc, amount: 70000, date: '2026-10-02', categoryId: 'cat-transporte' });
+    expect(budgetStatuses(transporte, [alto], categories, '2026-10', '2026-10-02')[0].status).toBe('alerta');
   });
 
   it('não extrapola recorrências, parcelas nem lançamentos agendados para depois de hoje', () => {
@@ -274,5 +298,29 @@ describe('suggestBudgets', () => {
   it('retorna vazio sem histórico', () => {
     expect(suggestBudgets(history, categories, '2026-06')).toEqual([]);
     expect(suggestBudgets([], categories, '2026-10')).toEqual([]);
+  });
+});
+
+describe('categorySpent', () => {
+  const transactions = [
+    makeTransaction({ accountId: acc, categoryId: 'cat-mercado', amount: 1000, date: '2026-10-01' }),
+    makeTransaction({ accountId: acc, categoryId: 'cat-mercado', amount: 2000, date: '2026-10-31', status: 'pendente' }),
+    makeTransaction({ accountId: acc, categoryId: 'cat-mercado', amount: 4000, date: '2026-11-01' }),
+    makeTransaction({ accountId: acc, type: 'receita', categoryId: 'cat-mercado', amount: 8000, date: '2026-10-10' }),
+    makeTransaction({ accountId: acc, categoryId: 'cat-lazer', amount: 500, date: '2026-10-05' }),
+  ];
+
+  it('soma pagas e pendentes só da categoria e do mês', () => {
+    expect(categorySpent(transactions, 'cat-mercado', '2026-10')).toBe(3000);
+    expect(categorySpent([], 'cat-mercado', '2026-10')).toBe(0);
+  });
+
+  it('é o mesmo "gasto" que budgetStatuses mostra para a categoria', () => {
+    const budgets = [
+      makeBudget({ categoryId: 'cat-mercado', amount: 10000, month: null }),
+      makeBudget({ categoryId: 'cat-lazer', amount: 10000, month: null }),
+    ];
+    for (const s of budgetStatuses(budgets, transactions, categories, '2026-10', '2026-10-15'))
+      expect(categorySpent(transactions, s.categoryId, '2026-10')).toBe(s.spent);
   });
 });

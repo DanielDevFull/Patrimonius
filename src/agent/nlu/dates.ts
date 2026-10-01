@@ -140,7 +140,8 @@ export function findDates(t: string, today: ISODate): DateMatch[] {
     const iso = `${m[1]}-${m[2]}-${m[3]}`;
     return isISODate(iso) ? iso : null;
   });
-  each(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?(?![\d/])/g, (m) => {
+  // "dia 20/09": o "dia" faz parte da data (senão "80 dia 20/09" seria lido como "80 dias").
+  each(/(?:\bdia\s+)?(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?(?![\d/])/g, (m) => {
     const day = Number(m[1]);
     const month = Number(m[2]);
     if (m[3]) {
@@ -169,6 +170,16 @@ export function findDates(t: string, today: ISODate): DateMatch[] {
     const day = m[1] === 'primeiro' ? 1 : toInt(m[1]);
     return day === null ? null : resolveDayOfMonth(day, today);
   });
+  // "3ª feira" (fold => "3a feira"): 2ª = segunda ... 6ª = sexta.
+  each(
+    /\b(?:(proxim[oa])\s+)?([2-6])a[\s-]*feira\b(?:\s+(passad[oa]|retrasad[oa]|que vem))?/g,
+    (m) => {
+      const target = Number(m[2]) - 1;
+      if (m[1] || m[3] === 'que vem') return resolveWeekday(target, today, 'next');
+      if (m[3]?.startsWith('retrasad')) return addDays(resolveWeekday(target, today, 'past'), -7);
+      return resolveWeekday(target, today, m[3] ? 'past' : 'recent');
+    },
+  );
   each(
     /\b(?:(proxim[oa])\s+)?(domingo|segunda|terca|quarta|quinta|sexta|sabado)(?:[\s-]*feira)?(?:\s+(passad[oa]|retrasad[oa]|que vem))?\b(?!\s+(?:parcela|prestacao|vez|via|opcao|etapa|mao|chamada))/g,
     (m) => {

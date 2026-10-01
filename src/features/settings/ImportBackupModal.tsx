@@ -41,7 +41,8 @@ const MODES: { value: ImportMode; title: string; description: string }[] = [
   {
     value: 'merge',
     title: 'Mesclar',
-    description: 'Mantém os dados atuais e adiciona os do backup. Registros iguais são atualizados pela versão do arquivo.',
+    description:
+      'Mantém os dados atuais e adiciona os do backup. Registros com o mesmo id são atualizados pela versão do arquivo; registros equivalentes (a mesma ocorrência de uma recorrência, o mesmo orçamento) são unificados.',
   },
 ];
 

@@ -6,6 +6,12 @@ import type { BudgetHealth, BudgetOverview, BudgetStatus, BudgetSuggestion } fro
 
 /** Fração do orçamento a partir da qual a categoria entra em alerta. */
 const ALERT_THRESHOLD = 0.8;
+/**
+ * Dias decorridos mínimos para projetar o fim do mês pelo ritmo diário. Antes disso, poucas compras seriam
+ * multiplicadas por até 31 (ex.: R$ 194,60 no dia 1º => "deve fechar em R$ 6.032,60") e gerariam alarmes falsos.
+ * Exportado para a tela de Orçamentos explicar por que ainda não há projeção.
+ */
+export const MIN_PACE_DAYS = 7;
 /** Sugestões são arredondadas para cima em múltiplos de R$ 10. */
 const SUGGESTION_STEP: Cents = 1000;
 
@@ -45,6 +51,21 @@ function budgetHealth(spent: Cents, budgeted: Cents, percent: number, projected:
   return 'ok';
 }
 
+/** Despesa que conta como "gasto" de orçamento no mês: paga ou pendente, com categoria, com data no mês. */
+function isMonthExpense(tx: Transaction, month: MonthKey): tx is Transaction & { categoryId: ID } {
+  return tx.type === 'despesa' && tx.categoryId !== null && isInMonth(tx.date, month);
+}
+
+/**
+ * Total de despesas (pagas + pendentes) de uma categoria no mês — o mesmo `spent` de budgetStatuses
+ * (usado, por exemplo, no formulário de orçamento antes de a categoria ter orçamento).
+ */
+export function categorySpent(transactions: Transaction[], categoryId: ID, month: MonthKey): Cents {
+  let total = 0;
+  for (const tx of transactions) if (isMonthExpense(tx, month) && tx.categoryId === categoryId) total += tx.amount;
+  return total;
+}
+
 interface CategorySpending {
   /** Gastos variáveis (sem recorrência/parcelamento) com data <= today. */
   variableToDate: Cents;
@@ -62,6 +83,8 @@ interface CategorySpending {
  * lançamentos de recorrência/parcela (valor fixo, não se repetem no mês) e os lançamentos com data futura.
  * Sem lançamentos fixos/futuros, é exatamente spent / diasDecorridos * diasNoMês. Isso evita que uma conta fixa
  * (ex.: aluguel pago no dia 1º ou gerado como pendente para o dia 25) seja extrapolada para o mês inteiro.
+ * O ritmo só vale a partir do 7º dia do mês (MIN_PACE_DAYS): antes, projected = spent (ainda não há dias suficientes
+ * para medir o ritmo) — e, portanto, o alerta vem só de percent >= 80%.
  * Meses passados e futuros: projected = spent.
  */
 export function budgetStatuses(
@@ -78,7 +101,7 @@ export function budgetStatuses(
   const spending = new Map<ID, CategorySpending>();
   for (const c of eligible) spending.set(c.id, { variableToDate: 0, scheduled: 0 });
   for (const tx of transactions) {
-    if (tx.type !== 'despesa' || tx.categoryId === null || !isInMonth(tx.date, month)) continue;
+    if (!isMonthExpense(tx, month)) continue;
     const entry = spending.get(tx.categoryId);
     if (!entry) continue;
     const fixed = tx.recurringId !== null || tx.installment !== null;
@@ -88,6 +111,7 @@ export function budgetStatuses(
 
   const isCurrentMonth = monthKey(today) === month;
   const elapsedDays = parseISO(today).day;
+  const usePace = isCurrentMonth && elapsedDays >= MIN_PACE_DAYS;
   const monthDays = daysInMonthKey(month);
 
   const statuses: BudgetStatus[] = [];
@@ -99,9 +123,7 @@ export function budgetStatuses(
     const spent = variableToDate + scheduled;
     const budgeted = budget.amount;
     const percent = budgeted > 0 ? spent / budgeted : spent > 0 ? Infinity : 0;
-    const projected = isCurrentMonth
-      ? Math.round((variableToDate / elapsedDays) * monthDays) + scheduled
-      : spent;
+    const projected = usePace ? Math.round((variableToDate / elapsedDays) * monthDays) + scheduled : spent;
     statuses.push({
       categoryId: category.id,
       categoryName: category.name,

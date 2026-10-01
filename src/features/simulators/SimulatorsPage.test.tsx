@@ -41,6 +41,14 @@ describe('SimulatorsPage', () => {
     vi.useRealTimers();
   });
 
+  it('aba e painel ligados (aria-controls/aria-labelledby), inclusive por link direto', async () => {
+    await renderPage('/simuladores?aba=quitar');
+    const tab = screen.getByRole('tab', { name: 'Quitar ou investir?' });
+    const tabpanel = await screen.findByRole('tabpanel', { name: 'Quitar ou investir?' });
+    expect(tab).toHaveAttribute('aria-controls', tabpanel.id);
+    expect(tabpanel).toHaveAttribute('aria-labelledby', tab.id);
+  });
+
   it('juros compostos: calcula o valor final, o investido e os juros em tempo real', async () => {
     const user = await renderPage();
     const p = await panel('Juros compostos');

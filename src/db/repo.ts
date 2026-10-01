@@ -2,9 +2,10 @@
  * Camada de acesso a dados (CRUD + operações de negócio). Toda escrita no banco deve passar por aqui.
  * Todas as funções são assíncronas e operam SOMENTE no IndexedDB local.
  */
+import { debtCurrentBalance } from '@/analytics/debts';
 import { materializeRecurring } from '@/analytics/recurring';
 import { addMonths, endOfMonth, monthKey, nowTimestamp, todayISO } from '@/domain/dates';
-import { CATEGORY_IDS, buildDefaultCategories, buildDefaultSettings } from '@/domain/defaults';
+import { CATEGORY_IDS, SYSTEM_CATEGORY_IDS, buildDefaultCategories, buildDefaultSettings } from '@/domain/defaults';
 import { splitCents } from '@/domain/money';
 import type {
   Account,
@@ -38,16 +39,8 @@ type Patch<T> = Partial<Omit<T, 'id' | 'createdAt' | 'updatedAt'>>;
 /* Inicialização                                                       */
 /* ------------------------------------------------------------------ */
 
-/**
- * Categorias usadas diretamente pelo código (aportes, pagamentos de dívida, substituição ao excluir).
- * Não podem ser excluídas e são recriadas se faltarem (ex.: backup importado sem elas).
- */
-export const SYSTEM_CATEGORY_IDS: readonly ID[] = [
-  CATEGORY_IDS.outrosDespesa,
-  CATEGORY_IDS.outrosReceita,
-  CATEGORY_IDS.investimentos,
-  CATEGORY_IDS.dividas,
-];
+/** Categorias de sistema (não podem ser excluídas; recriadas se faltarem). Definidas em @/domain/defaults. */
+export { SYSTEM_CATEGORY_IDS };
 
 /** Garante categorias padrão (e as de sistema) e registro de configurações. Idempotente. */
 export async function ensureInitialized(): Promise<void> {
@@ -161,18 +154,27 @@ export async function countAccountUsage(id: ID): Promise<number> {
 }
 
 /**
- * Exclui a conta se não houver lançamentos vinculados; caso contrário, arquiva.
+ * Exclui a conta se não houver lançamentos nem recorrências vinculados; caso contrário, arquiva.
+ * Ao excluir, as metas que guardavam dinheiro nela ficam sem conta vinculada (goal.accountId é só informativo):
+ * sem isso, o próximo aporte viraria uma transferência para uma conta que não existe mais.
  * Retorna 'deleted' ou 'archived'.
  */
 export async function deleteOrArchiveAccount(id: ID): Promise<'deleted' | 'archived'> {
-  const usage = await countAccountUsage(id);
-  const recurringUsage = await db.recurring.filter((r) => r.accountId === id).count();
-  if (usage === 0 && recurringUsage === 0) {
-    await db.accounts.delete(id);
-    return 'deleted';
-  }
-  await updateAccount(id, { archived: true });
-  return 'archived';
+  return db.transaction(
+    'rw',
+    [db.accounts, db.transactions, db.recurring, db.goals],
+    async (): Promise<'deleted' | 'archived'> => {
+      const usage = await countAccountUsage(id);
+      const recurringUsage = await db.recurring.filter((r) => r.accountId === id).count();
+      if (usage === 0 && recurringUsage === 0) {
+        await db.goals.filter((g) => g.accountId === id).modify({ accountId: null, updatedAt: nowTimestamp() });
+        await db.accounts.delete(id);
+        return 'deleted';
+      }
+      await updateAccount(id, { archived: true });
+      return 'archived';
+    },
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -303,7 +305,41 @@ export async function updateTransaction(id: ID, patch: Patch<Transaction>): Prom
   const next: Patch<Transaction> = { ...patch };
   if (patch.type && patch.type !== 'transferencia') next.toAccountId = null;
   if (patch.type === 'transferencia') next.categoryId = null;
-  await db.transactions.update(id, { ...next, updatedAt: nowTimestamp() });
+  await db.transaction(
+    'rw',
+    [db.transactions, db.debtPayments, db.goalContributions, db.debts, db.goals],
+    async () => {
+      await db.transactions.update(id, { ...next, updatedAt: nowTimestamp() });
+      if (next.amount === undefined && next.date === undefined && next.type === undefined) return;
+      const tx = await db.transactions.get(id);
+      if (tx) await syncLinkedRecords(tx);
+    },
+  );
+}
+
+/**
+ * Mantém o pagamento de dívida / aporte de meta criado junto com o lançamento coerente com ele depois de uma edição:
+ * valor e data são copiados do lançamento e o status da dívida/meta é recalculado. Se o lançamento virar receita,
+ * deixa de ser o pagamento/aporte e o vínculo é desfeito (o registro na dívida/meta continua).
+ */
+async function syncLinkedRecords(tx: Transaction): Promise<void> {
+  const unlink = tx.type === 'receita';
+  const payments = await db.debtPayments.filter((p) => p.transactionId === tx.id).toArray();
+  for (const p of payments) {
+    if (unlink) await db.debtPayments.update(p.id, { transactionId: null });
+    else if (p.amount !== tx.amount || p.date !== tx.date) {
+      await db.debtPayments.update(p.id, { amount: tx.amount, date: tx.date });
+      await syncDebtStatus(p.debtId);
+    }
+  }
+  const contributions = await db.goalContributions.filter((c) => c.transactionId === tx.id).toArray();
+  for (const c of contributions) {
+    if (unlink) await db.goalContributions.update(c.id, { transactionId: null });
+    else if (c.amount !== tx.amount || c.date !== tx.date) {
+      await db.goalContributions.update(c.id, { amount: tx.amount, date: tx.date });
+      await syncGoalStatus(c.goalId);
+    }
+  }
 }
 
 export async function setTransactionStatus(id: ID, status: Transaction['status']): Promise<void> {
@@ -340,9 +376,19 @@ export async function deleteTransaction(id: ID, scope: 'one' | 'group' | 'future
 /* Recorrências                                                        */
 /* ------------------------------------------------------------------ */
 
-export async function addRecurring(input: Omit<EntityInput<RecurringRule>, 'nextDate'>): Promise<RecurringRule> {
+/**
+ * Cria uma recorrência e gera os pendentes até o fim do mês corrente.
+ * `nextDate` (opcional) é a primeira ocorrência a gerar; padrão = startDate. Informe-o para NÃO gerar as ocorrências
+ * antigas de uma regra que começou no passado (ex.: aluguel desde janeiro, cadastrado em outubro): o início continua
+ * sendo a âncora do dia e da agenda. Uma data anterior ao início é ignorada.
+ */
+export async function addRecurring(
+  input: Omit<EntityInput<RecurringRule>, 'nextDate'> & { nextDate?: ISODate },
+): Promise<RecurringRule> {
   const now = nowTimestamp();
-  const rule: RecurringRule = { ...input, nextDate: input.startDate, id: newId(), createdAt: now, updatedAt: now };
+  const { nextDate, ...fields } = input;
+  const first = nextDate !== undefined && nextDate > fields.startDate ? nextDate : fields.startDate;
+  const rule: RecurringRule = { ...fields, nextDate: first, id: newId(), createdAt: now, updatedAt: now };
   await db.recurring.add(rule);
   await runRecurring();
   return (await db.recurring.get(rule.id)) ?? rule;
@@ -370,6 +416,46 @@ export async function deleteRecurring(id: ID, deletePending = true): Promise<voi
     await db.transactions.where('recurringId').equals(id).modify({ recurringId: null });
     await db.recurring.delete(id);
   });
+}
+
+/**
+ * Reagenda uma recorrência (mudança de início ou frequência) numa única transação:
+ * 1) remove os lançamentos PENDENTES gerados por ela com data >= `pendingFrom` (normalmente o início do mês corrente;
+ *    pendentes de meses anteriores são contas atrasadas reais e ficam; os pagos nunca são tocados);
+ * 2) grava `patch` com nextDate = `nextDateAfter(data do último lançamento que sobrou, ou null)`.
+ * Chame runRecurring() depois para gerar as ocorrências da nova agenda. Retorna quantos pendentes foram removidos.
+ */
+export async function rescheduleRecurring(
+  id: ID,
+  patch: Patch<RecurringRule>,
+  pendingFrom: ISODate,
+  nextDateAfter: (lastRemaining: ISODate | null) => ISODate,
+): Promise<number> {
+  return db.transaction('rw', db.recurring, db.transactions, async () => {
+    const removed = await db.transactions
+      .where('recurringId')
+      .equals(id)
+      .filter((t) => t.status === 'pendente' && t.date >= pendingFrom)
+      .delete();
+    let last: ISODate | null = null;
+    for (const t of await db.transactions.where('recurringId').equals(id).toArray()) {
+      if (last === null || t.date > last) last = t.date;
+    }
+    await db.recurring.update(id, { ...patch, nextDate: nextDateAfter(last), updatedAt: nowTimestamp() });
+    return removed;
+  });
+}
+
+/**
+ * Remove os lançamentos PENDENTES gerados pela regra com data posterior a `endDate`
+ * (ao definir ou antecipar o término). Retorna quantos foram removidos.
+ */
+export async function deleteRecurringPendingAfter(id: ID, endDate: ISODate): Promise<number> {
+  return db.transactions
+    .where('recurringId')
+    .equals(id)
+    .filter((t) => t.status === 'pendente' && t.date > endDate)
+    .delete();
 }
 
 /**
@@ -456,9 +542,17 @@ export interface ContributionInput {
   note?: string;
   /**
    * Se informado, cria também um lançamento: transferência de `fromAccountId` para a conta da meta
-   * (se a meta tiver conta e for diferente) ou despesa na categoria Investimentos e reserva.
+   * (se a meta tiver conta existente, não arquivada e diferente da origem) ou despesa na categoria
+   * Investimentos e reserva.
    */
   fromAccountId?: ID | null;
+}
+
+/** Conta onde a meta guarda o dinheiro, se ainda existir e não estiver arquivada. */
+async function goalAccountOf(goal: Goal): Promise<Account | undefined> {
+  if (!goal.accountId) return undefined;
+  const account = await db.accounts.get(goal.accountId);
+  return account && !account.archived ? account : undefined;
 }
 
 /** Registra aporte/resgate e marca a meta como concluída quando atingir o alvo. */
@@ -468,7 +562,10 @@ export async function addGoalContribution(input: ContributionInput): Promise<Goa
   if (!goal) throw new Error('Meta não encontrada.');
   let transactionId: ID | null = null;
   if (input.fromAccountId && input.amount > 0) {
-    const isTransfer = goal.accountId && goal.accountId !== input.fromAccountId;
+    // Só transfere para a conta da meta se ela existir e estiver ativa (uma conta excluída ou arquivada não entra
+    // nos saldos: o dinheiro sumiria). Sem conta válida, vira despesa em Investimentos — o que o modal anuncia.
+    const target = await goalAccountOf(goal);
+    const isTransfer = !!target && target.id !== input.fromAccountId;
     const [tx] = await addTransaction({
       type: isTransfer ? 'transferencia' : 'despesa',
       amount: input.amount,
@@ -476,7 +573,7 @@ export async function addGoalContribution(input: ContributionInput): Promise<Goa
       description: `Aporte: ${goal.name}`,
       categoryId: isTransfer ? null : CATEGORY_IDS.investimentos,
       accountId: input.fromAccountId,
-      toAccountId: isTransfer ? goal.accountId : null,
+      toAccountId: isTransfer ? target.id : null,
       status: 'pago',
     });
     transactionId = tx.id;
@@ -526,19 +623,33 @@ export async function addDebt(input: EntityInput<Debt>): Promise<Debt> {
 }
 
 /**
+ * Saldo restante estimado de uma dívida, ignorando o status atual: o mesmo cálculo das telas
+ * (debtCurrentBalance — amortização mês a mês com os juros informados).
+ */
+function remainingDebt(debt: Debt, payments: DebtPayment[]): number {
+  return debtCurrentBalance({ ...debt, status: 'ativa' }, payments);
+}
+
+/** Recalcula 'ativa' <-> 'quitada' pelo saldo restante estimado (ex.: depois de editar o valor de um pagamento). */
+async function syncDebtStatus(debtId: ID): Promise<void> {
+  const debt = await db.debts.get(debtId);
+  if (!debt) return;
+  const payments = await db.debtPayments.where('debtId').equals(debtId).toArray();
+  const next = remainingDebt(debt, payments) > 0 ? 'ativa' : 'quitada';
+  if (next !== debt.status) await db.debts.update(debtId, { status: next, updatedAt: nowTimestamp() });
+}
+
+/**
  * Atualiza a dívida. Se o saldo ou a data do saldo mudarem (e o status não vier explícito no patch),
- * o status é recalculado: saldo restante <= 0 => 'quitada', senão 'ativa'.
+ * o status é recalculado: saldo restante estimado (com juros) <= 0 => 'quitada', senão 'ativa'.
  */
 export async function updateDebt(id: ID, patch: Patch<Debt>): Promise<void> {
   const next: Patch<Debt> = { ...patch };
   if ((patch.balance !== undefined || patch.balanceDate !== undefined) && patch.status === undefined) {
     const debt = await db.debts.get(id);
     if (debt) {
-      const balance = patch.balance ?? debt.balance;
-      const balanceDate = patch.balanceDate ?? debt.balanceDate;
       const payments = await db.debtPayments.where('debtId').equals(id).toArray();
-      const paid = payments.filter((p) => p.date >= balanceDate).reduce((sum, p) => sum + p.amount, 0);
-      next.status = balance - paid > 0 ? 'ativa' : 'quitada';
+      next.status = remainingDebt({ ...debt, ...patch }, payments) > 0 ? 'ativa' : 'quitada';
     }
   }
   await db.debts.update(id, { ...next, updatedAt: nowTimestamp() });
@@ -560,7 +671,10 @@ export interface DebtPaymentInput {
   fromAccountId?: ID | null;
 }
 
-/** Registra pagamento; marca a dívida como quitada quando o saldo chegar a zero. */
+/**
+ * Registra pagamento; marca a dívida como quitada quando o saldo restante estimado (amortizado com os juros
+ * mensais, ver debtCurrentBalance) chegar a zero — não basta a soma dos pagamentos alcançar o saldo informado.
+ */
 export async function addDebtPayment(input: DebtPaymentInput): Promise<DebtPayment> {
   if (!Number.isInteger(input.amount) || input.amount <= 0) throw new Error('Valor deve ser maior que zero.');
   const debt = await db.debts.get(input.debtId);
@@ -589,8 +703,7 @@ export async function addDebtPayment(input: DebtPaymentInput): Promise<DebtPayme
   };
   await db.debtPayments.add(payment);
   const payments = await db.debtPayments.where('debtId').equals(debt.id).toArray();
-  const paid = payments.filter((p) => p.date >= debt.balanceDate).reduce((s, p) => s + p.amount, 0);
-  if (debt.status === 'ativa' && debt.balance - paid <= 0) await updateDebt(debt.id, { status: 'quitada' });
+  if (debt.status === 'ativa' && remainingDebt(debt, payments) <= 0) await updateDebt(debt.id, { status: 'quitada' });
   return payment;
 }
 
@@ -602,8 +715,7 @@ export async function deleteDebtPayment(id: ID, alsoDeleteTransaction = false): 
   const debt = await db.debts.get(p.debtId);
   if (debt && debt.status === 'quitada') {
     const payments = await db.debtPayments.where('debtId').equals(debt.id).toArray();
-    const paid = payments.filter((x) => x.date >= debt.balanceDate).reduce((s, x) => s + x.amount, 0);
-    if (debt.balance - paid > 0) await updateDebt(debt.id, { status: 'ativa' });
+    if (remainingDebt(debt, payments) > 0) await updateDebt(debt.id, { status: 'ativa' });
   }
 }
 
@@ -613,7 +725,8 @@ export async function deleteDebtPayment(id: ID, alsoDeleteTransaction = false): 
 
 /**
  * Cria um bem e registra a primeira avaliação em `valuationDate` (padrão: hoje).
- * Antes dela, o histórico de patrimônio usa acquisitionValue ?? value.
+ * Antes dela (e a partir de acquisitionDate), o histórico de patrimônio usa o valor dessa primeira avaliação —
+ * como as contas, o bem fica "plano" antes do cadastro, sem saltos falsos de valorização ou depreciação.
  */
 export async function addAsset(input: EntityInput<Asset>, valuationDate: ISODate = todayISO()): Promise<Asset> {
   const now = nowTimestamp();
@@ -631,8 +744,18 @@ export async function addAsset(input: EntityInput<Asset>, valuationDate: ISODate
   return asset;
 }
 
+/**
+ * Atualiza um bem. Ao arquivar (archived: true), registra `archivedAt` (o informado no patch ou hoje), a partir de
+ * quando o bem deixa de contar no patrimônio — o histórico anterior o mantém. Ao desarquivar, limpa `archivedAt`.
+ */
 export async function updateAsset(id: ID, patch: Patch<Omit<Asset, 'value'>>): Promise<void> {
-  await db.assets.update(id, { ...patch, updatedAt: nowTimestamp() });
+  const next: Patch<Omit<Asset, 'value'>> = { ...patch };
+  if (patch.archived === false) next.archivedAt = null;
+  else if (patch.archived === true && patch.archivedAt === undefined) {
+    const asset = await db.assets.get(id);
+    if (asset && !asset.archived) next.archivedAt = todayISO();
+  }
+  await db.assets.update(id, { ...next, updatedAt: nowTimestamp() });
 }
 
 /** Registra uma nova avaliação e atualiza o valor atual se for a mais recente. */

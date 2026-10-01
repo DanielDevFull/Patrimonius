@@ -7,7 +7,7 @@ import {
 } from '@/analytics';
 import { ROUTES } from '@/app/navigation';
 import { MONTH_NAMES, addMonthsToKey, isInMonth, monthKey, parseISO } from '@/domain/dates';
-import { formatBRL } from '@/domain/money';
+import { formatBRL, formatDecimal } from '@/domain/money';
 import type { FinanceData, ISODate } from '@/domain/types';
 import {
   SEVERITY_LABEL,
@@ -168,7 +168,24 @@ export const helpReply: Handler = (ctx) => {
 };
 
 /** desconhecido (sem contexto para completar) */
-export const unknownReply: Handler = (ctx) => ({
+export const unknownReply: Handler = (ctx) => {
+  const e = ctx.entities;
+  // "recebo 9650 dia 5", "pago 2200 de aluguel todo mês": hábito, não lançamento — sugere cadastrar a recorrência.
+  if (e.habitual && e.amount) {
+    const income = /^\s*(?:eu\s+)?(?:recebo|ganho|faturo)\b/.test(ctx.parsed.normalized);
+    const day = e.date ? ` (dia ${Number(e.date.slice(8, 10))})` : '';
+    const value = formatDecimal(e.amount);
+    return {
+      text: `Entendi que ${income ? 'você recebe' : 'esse gasto é de'} ${formatBRL(e.amount)} todo mês${day}. Para eu prever ${income ? 'essa entrada' : 'essa conta'} nos próximos meses, cadastre em Recorrências. Se quiser registrar o ${income ? 'recebimento' : 'pagamento'} deste mês, diga, por exemplo, “${income ? `recebi ${value} de salário` : `paguei ${value}`}”.`,
+      actions: [{ type: 'navigate', label: 'Cadastrar recorrência', to: ROUTES.recurring }],
+      suggestions: [income ? `Recebi ${value} de salário` : `Paguei ${value}`, 'Minhas assinaturas'],
+      memory: 'keep',
+    };
+  }
+  return genericUnknown(ctx);
+};
+
+const genericUnknown: Handler = (ctx) => ({
   text: `${withVocative(ctx.name, 'não entendi bem. 🤔 Pode reformular?')} Alguns exemplos do que eu sei fazer:\n${bullets([
     '“gastei 50 no mercado”',
     '“quanto gastei este mês?”',

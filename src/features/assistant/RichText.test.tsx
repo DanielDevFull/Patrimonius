@@ -1,6 +1,6 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { InlineText, RichText } from './RichText';
+import { InlineText, RichText, UserText } from './RichText';
 
 describe('RichText', () => {
   it('converte negrito, listas e quebras de linha em elementos React', () => {
@@ -33,5 +33,13 @@ describe('RichText', () => {
     const { container } = render(<InlineText text="Limite **R$ 800,00**" />);
     expect(container.querySelector('p')).toBeNull();
     expect(container.querySelector('strong .money')?.textContent).toBe('R$ 800,00');
+  });
+
+  it('UserText marca os valores do texto livre do usuário com .money, sem interpretar markdown nem HTML', () => {
+    const { container } = render(<UserText text={'gastei 1.250 no **aluguel** <b>e</b> 6 mil em 12 meses'} />);
+    expect([...container.querySelectorAll('.money')].map((el) => el.textContent)).toEqual(['1.250', '6 mil']);
+    expect(container.querySelector('strong')).toBeNull();
+    expect(container.querySelector('b')).toBeNull();
+    expect(container.textContent).toBe('gastei 1.250 no **aluguel** <b>e</b> 6 mil em 12 meses');
   });
 });

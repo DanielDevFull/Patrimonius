@@ -171,7 +171,48 @@ const PROTECTED = new Set([
   'vencida',
   'vencidas',
   'vencidos',
+  // Palavras comuns a 1 erro de uma palavra-chave (meses curtos, verbos e nomes do vocabulário).
+  'maior',
+  'menor',
+  'junto',
+  'juntos',
+  'junta',
+  'juntas',
+  'juntou',
+  'vender',
+  'vendo',
+  'vende',
+  'vendeu',
+  'venda',
+  'vendas',
+  'recebo',
+  'abrir',
+  'abriu',
+  'marca',
+  'marcas',
+  'passo',
+  'meias',
+  'mesas',
+  'salvo',
+  'salto',
+  'pegar',
+  'quarto',
+  'gatos',
+  'gostar',
+  'gostei',
+  'gosta',
+  'gostou',
+  'gostando',
+  'duvida',
+  'duvidas',
+  'manha',
+  'manhas',
+  'jantar',
+  'jantares',
 ]);
+
+/** Meses curtos (<= 5 letras) não são alvo da correção aproximada: "maior" => "maio", "junto" => "junho"... */
+const NO_FUZZY_TARGET = new Set(['maio', 'junho', 'julho', 'abril', 'marco']);
 
 /**
  * Corrige palavras desconhecidas (>= 5 letras) que estão a ~1 erro de uma palavra-chave de intenção
@@ -185,7 +226,7 @@ export function correctTypos(t: string, known: Set<string>): string {
     let best = w;
     let bestScore = 0;
     for (const v of INTENT_VOCAB) {
-      if (Math.abs(v.length - w.length) > 2) continue;
+      if (NO_FUZZY_TARGET.has(v) || Math.abs(v.length - w.length) > 2) continue;
       const score = fuzzyScore(w, v);
       if (score >= 0.8 && score > bestScore) {
         best = v;
@@ -355,7 +396,21 @@ export const TRANSFER_STRONG =
   /\b(transferi|transfere|transferir|transferencia|transfira|movi|mover|movimentei|saquei|sacar|saque)\b/;
 export const TRANSFER_WEAK =
   /\b(passei|passa|mandei|enviei|joguei|depositei|guardei|coloquei|botei|apliquei|separei|resgatei|resgatar|resgate)\b/;
-export const INVOICE_PAYMENT = /\b(paguei|pagar|pagamento|quitei)\s+(?:a\s+|da\s+|o\s+)?fatura\b/;
+/**
+ * Pagamento de fatura: o verbo pode vir separado de "fatura" pelo valor ("paguei 3907,96 da fatura do cartão"),
+ * mas só por até 4 palavras — "paguei 50 no uber, vai pra fatura" continua sendo uma despesa.
+ */
+export const INVOICE_PAYMENT = /\b(paguei|pagamos|pagar|pagamento|quitei)\b(?:\s+\S+){0,4}?\s+fatura\b/;
+/** Tirar dinheiro de uma conta própria ("tirei 200 da poupança") é transferência (exige a conta citada). */
+export const WITHDRAW_FROM_ACCOUNT = /\b(tirei|retirei|puxei|tirar|retirar|puxar)\b/;
+/** Valor dito no presente ("recebo 9650 dia 5", "ganho 5 mil por mês"): hábito, não um lançamento. */
+const HABITUAL_INCOME = /^(?:eu\s+)?(?:recebo|ganho|faturo)\b/;
+const HABITUAL_EXPENSE = /^(?:eu\s+)?(?:gasto|pago)\b.*\b(?:(?:todo|cada)\s+mes|por\s+mes|mensalmente|ao\s+mes)\b/;
+
+/** Frase no presente que descreve um hábito com valor ("recebo 9650 dia 5"): não deve virar lançamento. */
+export function isHabitualStatement(tc: string): boolean {
+  return HABITUAL_INCOME.test(tc) || HABITUAL_EXPENSE.test(tc);
+}
 export const INTERROGATIVE =
   /^(?:e\s+)?(?:quanto|quanta|quantas|quantos|qual|quais|como|onde|aonde|quando|por que|porque|sera|o que|que|cade|posso|consigo|da pra|da para|devo|vale a pena|tenho como|existe|me (?:diz|diga|mostra|mostre|fala))\b/;
 /** Palavras que indicam pedido/planejamento (não um lançamento curto do tipo "uber 23,50"). */
@@ -394,6 +449,12 @@ const QUERY_RULES: Rule[] = [
     'plano_dividas',
     /\b(quitar|quito|quitacao|sair d[ao]s? (?:minhas? )?dividas?|sair do vermelho|pagar (?:minhas |as |todas as )?dividas|plano\b.*\bdividas?|estrategia\b.*\bdividas?|avalanche|bola de neve|livre d[ae]s? dividas?|eliminar\b.*\bdividas?|acabar com\b.*\bdividas?|limpar (?:o |meu )?nome|renegociar|ordem\b.*\bdividas?|qual divida pagar|qual (?:divida )?pagar primeiro|pagar\b.*\bprimeiro|primeiro\b.*\bdividas?)\b/,
     0.9,
+  ],
+  // Fatura e limite do cartão ("qual a fatura do cartão?", "quanto tenho de limite no cartão?", "quanto devo no cartão?").
+  [
+    'consultar_saldo',
+    /\bfaturas?\b|\blimites?\b.*\bcartao\b|\bcartao\b.*\blimites?\b|\b(?:devo|devendo|deve|devemos)\b.*\bcartao\b/,
+    0.85,
   ],
   [
     'status_dividas',
@@ -434,12 +495,12 @@ const QUERY_RULES: Rule[] = [
   ],
   [
     'maiores_gastos',
-    /\b(onde (?:(?:eu )?(?:estou|estamos|ando|to) )?(?:gastando|gasto|gastei|gastamos)|maiores (?:gastos|despesas)|maior gasto|maior despesa|com o que (?:eu )?(?:mais )?(?:gasto|gastei|estou gastando)|com que (?:mais )?gast\w*|em que (?:eu )?(?:mais )?gast\w*|principais (?:gastos|despesas)|top (?:gastos|despesas|categorias)|o que mais (?:pesa|gastei|gasto|consome)|ranking|categorias? que mais|gastando mais|gastei mais com|(?:pra|para) onde (?:vai|foi|esta indo|ta indo|estao indo) (?:o |meu )?dinheiro|vil[aoe]e?s?)\b/,
+    /\b(onde (?:(?:eu )?(?:estou|estamos|ando|to) )?(?:gastando|gasto|gastei|gastamos)|maiores (?:gastos|despesas)|maior (?:gasto|despesa)s?|com o que (?:eu )?(?:mais )?(?:gasto|gastei|estou gastando)|com que (?:mais )?gast\w*|em que (?:eu )?(?:mais )?gast\w*|principais (?:gastos|despesas)|top (?:gastos|despesas|categorias)|o que mais (?:pesa|gastei|gasto|consome)|ranking|categorias? que mais|gastando mais|gastei mais com|(?:pra|para) onde (?:vai|foi|esta indo|ta indo|estao indo) (?:o |meu )?dinheiro|vil[aoe]e?s?)\b/,
     0.85,
   ],
   [
     'contas_a_pagar',
-    /\b(contas? (?:a|para|pra) pagar|o que (?:vence|tenho (?:pra|para|a) pagar)|vencendo|vencimentos?|vence|vencem|vencer|vencidas?|vencidos?|a vencer|proximas contas|proximos pagamentos|boletos?|pagamentos? pendentes?|contas? pendentes?|lancamentos? pendentes?|pendencias|tenho que pagar|preciso pagar|falta pagar)\b/,
+    /\b(contas? (?:a|para|pra) pagar|pagar (?:as|minhas|todas as) contas|dinheiro (?:pra|para) pagar|o que (?:vence|tenho (?:pra|para|a) pagar)|vencendo|vencimentos?|vence|vencem|vencer|vencidas?|vencidos?|a vencer|proximas contas|proximos pagamentos|boletos?|pagamentos? pendentes?|contas? pendentes?|lancamentos? pendentes?|pendencias|tenho que pagar|preciso pagar|falta pagar)\b/,
     0.85,
   ],
   ['assinaturas', /\b(gastos fixos|despesas fixas|contas fixas|recorrentes|recorrencias)\b/, 0.85],
@@ -556,11 +617,16 @@ export function classify(s: IntentSignals): Classification {
   }
 
   if (s.hasAmount && !s.interrogative) {
+    // Hábito no presente: não vira lançamento (o respondedor sugere cadastrar uma recorrência).
+    if (isHabitualStatement(t)) return { intent: 'desconhecido', confidence: 0.1 };
     if (INVOICE_PAYMENT.test(t)) return { intent: 'registrar_transferencia', confidence: 0.85 };
     if (TRANSFER_STRONG.test(t)) return { intent: 'registrar_transferencia', confidence: 0.9 };
     if (TRANSFER_WEAK.test(t) && s.hasDestinationAccount)
       return { intent: 'registrar_transferencia', confidence: 0.85 };
     if (/\b(resgatei|resgatar|resgate)\b/.test(t) && s.hasAnyAccount) {
+      return { intent: 'registrar_transferencia', confidence: 0.85 };
+    }
+    if (WITHDRAW_FROM_ACCOUNT.test(t) && s.hasAnyAccount) {
       return { intent: 'registrar_transferencia', confidence: 0.85 };
     }
     if (income && !(pastExpense && /^(?:eu\s+)?(gastei|paguei|comprei)/.test(t))) {
@@ -574,6 +640,32 @@ export function classify(s: IntentSignals): Classification {
         ? { intent: 'registrar_receita', confidence: 0.75 }
         : { intent: 'registrar_despesa', confidence: s.contentWords > 0 ? 0.7 : 0.55 };
     }
+  }
+
+  // Pedido de registro sem valor (o respondedor pergunta "Qual foi o valor?" e guarda o resto para a resposta).
+  if (!s.hasAmount && !s.question && !s.hasPeriod) {
+    if (/^(?:eu\s+)?(?:recebi|ganhei|caiu|entrou)\b/.test(t) && s.contentWords > 0)
+      return { intent: 'registrar_receita', confidence: 0.5 };
+    if (INVOICE_PAYMENT.test(t) || /^(?:eu\s+)?(?:paguei|quitei)\s+(?:a\s+|da\s+|o\s+)?fatura\b/.test(t))
+      return { intent: 'registrar_transferencia', confidence: 0.5 };
+    if (
+      (TRANSFER_STRONG.test(t) && s.hasAnyAccount) ||
+      (WITHDRAW_FROM_ACCOUNT.test(t) && s.hasAnyAccount) ||
+      (/^(?:eu\s+)?(?:passei|mandei|enviei|depositei|coloquei|botei|apliquei|resgatei)\b/.test(t) && s.hasDestinationAccount)
+    )
+      return { intent: 'registrar_transferencia', confidence: 0.5 };
+    if (
+      /\b(definir|define|defina|colocar|coloca|criar|crie|cria|cadastrar|mudar|muda|alterar|altera|ajustar|ajusta|fixar|estabelecer|novo|nova)\b.*\b(orcamento|limite|teto)\b/.test(t) &&
+      !/\bcartao\b/.test(t)
+    )
+      return { intent: 'definir_orcamento', confidence: 0.5 };
+    if (
+      !createGoal &&
+      contributeVerb.test(t) &&
+      (/\bmetas?\b/.test(t) || s.hasGoal) &&
+      !/\b(quanto|falta|faltam)\b/.test(t)
+    )
+      return { intent: 'aportar_meta', confidence: 0.5 };
   }
 
   for (const [intent, re, confidence] of QUERY_RULES) {

@@ -1,4 +1,4 @@
-import type { BudgetGroup, Category, CategoryKind, Settings } from './types';
+import type { BudgetGroup, Category, CategoryKind, ID, Settings } from './types';
 
 interface CategorySeed {
   id: string;
@@ -12,7 +12,8 @@ interface CategorySeed {
 
 /**
  * Categorias padrão (IDs estáveis — podem ser referenciados pelo código, ex.: CATEGORY_IDS.dividas).
- * Palavras-chave em minúsculas e sem acento.
+ * Palavras-chave em minúsculas e COM acento (são exibidas nas Configurações); a NLU e o categorizador as
+ * comparam já sem acento (`fold`), então "condomínio" casa com "condominio" e vice-versa.
  */
 export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
   // ---------------- Despesas: necessidades ----------------
@@ -23,7 +24,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '🏠',
     color: '#6366f1',
     group: 'necessidades',
-    keywords: ['aluguel', 'condominio', 'iptu', 'reforma', 'casa', 'apartamento', 'imobiliaria', 'manutencao'],
+    keywords: ['aluguel', 'condomínio', 'iptu', 'reforma', 'casa', 'apartamento', 'imobiliária', 'manutenção'],
   },
   {
     id: 'cat-contas',
@@ -39,9 +40,9 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
       'cemig',
       'copel',
       'light',
-      'agua',
+      'água',
       'sabesp',
-      'gas',
+      'gás',
       'internet',
       'telefone',
       'celular',
@@ -64,14 +65,14 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
       'supermercado',
       'feira',
       'hortifruti',
-      'acougue',
+      'açougue',
       'padaria',
-      'atacadao',
-      'assai',
+      'atacadão',
+      'assaí',
       'carrefour',
-      'pao de acucar',
+      'pão de açúcar',
       'extra',
-      'compras do mes',
+      'compras do mês',
     ],
   },
   {
@@ -84,18 +85,18 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     keywords: [
       'uber',
       '99',
-      'taxi',
-      'onibus',
-      'metro',
-      'combustivel',
+      'táxi',
+      'ônibus',
+      'metrô',
+      'combustível',
       'gasolina',
       'etanol',
       'posto',
       'estacionamento',
-      'pedagio',
+      'pedágio',
       'ipva',
       'seguro do carro',
-      'mecanico',
+      'mecânico',
       'oficina',
       'passagem',
     ],
@@ -108,16 +109,16 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     color: '#ef4444',
     group: 'necessidades',
     keywords: [
-      'farmacia',
-      'remedio',
-      'medico',
+      'farmácia',
+      'remédio',
+      'médico',
       'consulta',
       'exame',
-      'plano de saude',
+      'plano de saúde',
       'dentista',
       'hospital',
       'drogaria',
-      'psicologo',
+      'psicólogo',
       'terapia',
     ],
   },
@@ -137,7 +138,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '🧾',
     color: '#64748b',
     group: 'necessidades',
-    keywords: ['imposto', 'taxa', 'tarifa', 'irpf', 'darf', 'anuidade', 'multa', 'cartorio'],
+    keywords: ['imposto', 'taxa', 'tarifa', 'irpf', 'darf', 'anuidade', 'multa', 'cartório'],
   },
   // ---------------- Despesas: desejos ----------------
   {
@@ -153,10 +154,10 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
       'delivery',
       'lanche',
       'pizza',
-      'hamburguer',
-      'almoco',
+      'hambúrguer',
+      'almoço',
       'jantar',
-      'cafe',
+      'café',
       'bar',
       'rappi',
       'sushi',
@@ -182,13 +183,13 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     keywords: [
       'roupa',
       'sapato',
-      'tenis',
+      'tênis',
       'shopping',
       'amazon',
       'mercado livre',
       'shopee',
       'magalu',
-      'eletronico',
+      'eletrônico',
       'presente',
       'loja',
     ],
@@ -224,7 +225,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '💇',
     color: '#f43f5e',
     group: 'desejos',
-    keywords: ['salao', 'cabelo', 'barbearia', 'manicure', 'cosmetico', 'perfume', 'estetica'],
+    keywords: ['salão', 'cabelo', 'barbearia', 'manicure', 'cosmético', 'perfume', 'estética'],
   },
   {
     id: 'cat-pets',
@@ -233,7 +234,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '🐾',
     color: '#a16207',
     group: 'desejos',
-    keywords: ['pet', 'racao', 'veterinario', 'petshop', 'banho e tosa'],
+    keywords: ['pet', 'ração', 'veterinário', 'petshop', 'banho e tosa'],
   },
   {
     id: 'cat-doacoes',
@@ -242,7 +243,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '🎁',
     color: '#be185d',
     group: 'desejos',
-    keywords: ['doacao', 'dizimo', 'oferta', 'vaquinha', 'caridade'],
+    keywords: ['doação', 'dízimo', 'oferta', 'vaquinha', 'caridade'],
   },
   // ---------------- Despesas: objetivos ----------------
   {
@@ -252,7 +253,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '📈',
     color: '#10b981',
     group: 'objetivos',
-    keywords: ['investimento', 'aporte', 'tesouro', 'cdb', 'acoes', 'fii', 'reserva', 'previdencia', 'poupanca'],
+    keywords: ['investimento', 'aporte', 'tesouro', 'cdb', 'ações', 'fii', 'reserva', 'previdência', 'poupança'],
   },
   {
     id: 'cat-dividas',
@@ -261,7 +262,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '💳',
     color: '#dc2626',
     group: 'objetivos',
-    keywords: ['emprestimo', 'financiamento', 'parcela', 'divida', 'consignado', 'acordo', 'juros'],
+    keywords: ['empréstimo', 'financiamento', 'parcela', 'dívida', 'consignado', 'acordo', 'juros'],
   },
   {
     id: 'cat-outros-despesa',
@@ -280,7 +281,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '💼',
     color: '#16a34a',
     group: null,
-    keywords: ['salario', 'pagamento', 'holerite', 'adiantamento', 'vale', '13o', 'decimo terceiro', 'ferias', 'plr'],
+    keywords: ['salário', 'pagamento', 'holerite', 'adiantamento', 'vale', '13º', 'décimo terceiro', 'férias', 'plr'],
   },
   {
     id: 'cat-freelance',
@@ -289,7 +290,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '🧑‍💻',
     color: '#0d9488',
     group: null,
-    keywords: ['freela', 'freelance', 'bico', 'servico', 'projeto', 'comissao', 'venda', 'extra'],
+    keywords: ['freela', 'freelance', 'bico', 'serviço', 'projeto', 'comissão', 'venda', 'extra'],
   },
   {
     id: 'cat-rendimentos',
@@ -307,7 +308,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '↩️',
     color: '#0891b2',
     group: null,
-    keywords: ['reembolso', 'estorno', 'devolucao', 'restituicao'],
+    keywords: ['reembolso', 'estorno', 'devolução', 'restituição'],
   },
   {
     id: 'cat-outros-receita',
@@ -316,7 +317,7 @@ export const DEFAULT_CATEGORY_SEEDS: CategorySeed[] = [
     icon: '✨',
     color: '#84cc16',
     group: null,
-    keywords: ['presente', 'pix recebido', 'premio'],
+    keywords: ['presente', 'pix recebido', 'prêmio'],
   },
 ];
 
@@ -345,6 +346,28 @@ export const CATEGORY_IDS = {
   reembolso: 'cat-reembolso',
   outrosReceita: 'cat-outros-receita',
 } as const;
+
+/**
+ * Categorias usadas diretamente pelo código (destino padrão ao excluir, aportes em metas e pagamentos de dívidas).
+ * Não podem ser excluídas (só arquivadas) e são recriadas se faltarem (ex.: backup importado sem elas).
+ * Fonte única para o repositório (@/db/repo) e para a tela de categorias.
+ */
+export const SYSTEM_CATEGORY_IDS: readonly ID[] = [
+  CATEGORY_IDS.outrosDespesa,
+  CATEGORY_IDS.outrosReceita,
+  CATEGORY_IDS.investimentos,
+  CATEGORY_IDS.dividas,
+];
+
+/**
+ * Regra 50/30/20: fração da renda sugerida para cada grupo de categorias. Necessidades e desejos são tetos;
+ * objetivos (reserva, metas e dívidas) é um piso. Fonte única para análises, orçamentos, relatórios e o agente.
+ */
+export const RULE_50_30_20: Readonly<Record<BudgetGroup, number>> = {
+  necessidades: 0.5,
+  desejos: 0.3,
+  objetivos: 0.2,
+};
 
 export function buildDefaultCategories(now: string): Category[] {
   return DEFAULT_CATEGORY_SEEDS.map((seed) => ({

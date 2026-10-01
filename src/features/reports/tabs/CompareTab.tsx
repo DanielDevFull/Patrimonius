@@ -33,8 +33,9 @@ function Change({ current, previous, goodWhenUp }: { current: Cents; previous: C
       </span>
       <span className="sr-only">{SR_TEXT[dir]}</span>
       {dir !== 'same' && <Money value={Math.abs(diff)} />}
-      {pct !== null && dir !== 'same' && <span className="text-xs opacity-80">({formatPercent(Math.abs(pct))})</span>}
-      {pct === null && dir === 'up' && <span className="text-xs opacity-80">(novo)</span>}
+      {/* Sem opacity: o texto pequeno precisa do contraste cheio da cor (AA). */}
+      {pct !== null && dir !== 'same' && <span className="text-xs">({formatPercent(Math.abs(pct))})</span>}
+      {pct === null && dir === 'up' && <span className="text-xs">(novo)</span>}
     </span>
   );
 }
@@ -65,7 +66,7 @@ export function CompareTab({ data, month, maxMonth, onMonthChange }: CompareTabP
   return (
     <div className="space-y-4">
       <MonthPicker value={month} onChange={onMonthChange} max={maxMonth} />
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {summary.map((s) => (
           <div
             key={s.label}
@@ -98,7 +99,7 @@ export function CompareTab({ data, month, maxMonth, onMonthChange }: CompareTabP
               description={`Não há despesas em ${formatMonthLong(month)} nem em ${formatMonthLong(previous)}.`}
             />
           ) : (
-            <div className="-mx-4 overflow-x-auto px-4 sm:-mx-5 sm:px-5">
+            <div className="relative -mx-4 overflow-x-auto px-4 sm:-mx-5 sm:px-5">
               <table className="w-full min-w-max text-sm">
                 <caption className="sr-only">
                   {`Comparativo de despesas por categoria entre ${formatMonthLong(previous)} e ${formatMonthLong(month)}`}

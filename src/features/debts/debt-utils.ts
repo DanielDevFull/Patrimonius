@@ -1,7 +1,12 @@
 /**
  * Regras puras da tela de Dívidas (validação de formulários, alertas, plano de quitação).
  */
-import { annualToMonthlyRate, type PayoffStrategy, type StrategyComparison } from '@/analytics';
+import {
+  annualToMonthlyRate,
+  type PayoffPlan,
+  type PayoffStrategy,
+  type StrategyComparison,
+} from '@/analytics';
 import { addMonths, daysInMonth, isISODate, makeISO, parseISO } from '@/domain/dates';
 import type { Cents, Debt, DebtPayment, DebtType, ID, ISODate } from '@/domain/types';
 import {
@@ -204,6 +209,21 @@ export const STRATEGY_META: Record<PayoffStrategy, { name: string; tagline: stri
     description: 'Paga o mínimo de todas e usa o que sobrar na dívida de menor saldo.',
   },
 };
+
+/**
+ * Situação de um plano para a tela:
+ * - 'viavel': cobre os mínimos todo mês e quita tudo dentro do limite da simulação;
+ * - 'abaixo_minimos': a simulação zera as dívidas, mas o orçamento não cobre as parcelas mínimas (na vida real
+ *   haveria atraso, multas e mora, que não são simulados) — o prazo calculado é só uma estimativa otimista;
+ * - 'nao_quita': nem todas as dívidas são quitadas em até 50 anos (a `timeline` termina com saldo).
+ */
+export type PayoffPlanStatus = 'viavel' | 'abaixo_minimos' | 'nao_quita';
+
+export function payoffPlanStatus(plan: PayoffPlan): PayoffPlanStatus {
+  if (plan.feasible) return 'viavel';
+  const last = plan.timeline[plan.timeline.length - 1];
+  return last !== undefined && last.totalBalance <= 0 ? 'abaixo_minimos' : 'nao_quita';
+}
 
 export type PayoffAdvice =
   /** Nenhuma estratégia quita: o orçamento não cobre os mínimos. */

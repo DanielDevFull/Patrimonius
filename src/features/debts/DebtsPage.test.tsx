@@ -186,9 +186,10 @@ describe('DebtsPage', () => {
     const confirmDialog = within(
       await screen.findByRole('dialog', { name: 'Excluir o pagamento de 05/10/2026?' }),
     );
-    expect(
-      confirmDialog.getByText(/A despesa de R\$ 500,00 lançada na conta também será excluída/),
-    ).toBeInTheDocument();
+    // O valor vem num <span> à parte (MoneyText do confirm): compara o texto do diálogo inteiro.
+    expect(screen.getByRole('dialog', { name: 'Excluir o pagamento de 05/10/2026?' })).toHaveTextContent(
+      /A despesa de R\$ 500,00 lançada na conta também será excluída/,
+    );
     await user.click(confirmDialog.getByRole('button', { name: 'Excluir' }));
 
     expect(await screen.findByText('Pagamento excluído.')).toBeInTheDocument();
@@ -272,12 +273,67 @@ describe('DebtsPage', () => {
     const plan = within(await screen.findByRole('region', { name: 'Plano de quitação' }));
     const snowball = within(plan.getByRole('region', { name: 'Estratégia Bola de neve' }));
     expect(snowball.getByText('Inviável')).toBeInTheDocument();
-    expect(snowball.getByText(/não são quitadas em até 50 anos/)).toBeInTheDocument();
+    // A bola de neve quita o Empréstimo, mas o Cartão nunca: o texto não pode dizer que nenhuma é quitada.
+    expect(snowball.getByText(/nem todas as dívidas são quitadas em até 50 anos/)).toBeInTheDocument();
+    expect(within(snowball.getByRole('list')).getAllByRole('listitem')).toHaveLength(1);
     const avalanche = within(plan.getByRole('region', { name: 'Estratégia Avalanche' }));
     expect(avalanche.getByText('Recomendada')).toBeInTheDocument();
     expect(plan.getByText(/Só a estratégia/)).toHaveTextContent(
       'Só a estratégia Avalanche consegue quitar tudo',
     );
+  });
+
+  it('orçamento abaixo dos mínimos que ainda zeraria as dívidas não diz "não quita em 50 anos"', async () => {
+    await seedDebt({
+      name: 'Cheque especial',
+      type: 'cheque_especial',
+      originalAmount: 80000,
+      balance: 80000,
+      interestRate: 8,
+      minimumPayment: 10000,
+    });
+    await seedDebt({
+      name: 'Empréstimo pessoal',
+      originalAmount: 460000,
+      balance: 460000,
+      interestRate: 3.5,
+      minimumPayment: 40000,
+    });
+    const user = await renderPage();
+
+    const plan = within(await screen.findByRole('region', { name: 'Plano de quitação' }));
+    const budget = plan.getByLabelText('Orçamento mensal para dívidas');
+    await user.clear(budget);
+    await user.type(budget, '450');
+    expect(await plan.findByRole('alert')).toHaveTextContent('Faltam R$ 50,00 por mês');
+
+    for (const name of ['Avalanche', 'Bola de neve']) {
+      const s = within(plan.getByRole('region', { name: `Estratégia ${name}` }));
+      expect(s.getByText('Inviável')).toBeInTheDocument();
+      expect(s.queryByText(/quitadas em até 50 anos/)).not.toBeInTheDocument();
+      expect(s.getByText(/não cobre as parcelas mínimas/)).toHaveTextContent(
+        'Este valor não cobre as parcelas mínimas: na prática haverá atraso, multas e juros de mora (não simulados).',
+      );
+      expect(s.queryByText('Tempo até quitar')).not.toBeInTheDocument();
+      expect(s.getByRole('heading', { name: /Ordem de quitação/ })).toHaveTextContent(
+        'estimativa sem multas e mora',
+      );
+      expect(within(s.getByRole('list')).getAllByRole('listitem')).toHaveLength(2);
+    }
+  });
+
+  it('sem nenhuma dívida quitada no prazo, avisa que não são quitadas em até 50 anos', async () => {
+    await seedDebt({ name: 'Cartão', type: 'cartao', balance: 300000, interestRate: 12, minimumPayment: 0 });
+    const user = await renderPage();
+
+    const plan = within(await screen.findByRole('region', { name: 'Plano de quitação' }));
+    await user.type(plan.getByLabelText('Orçamento mensal para dívidas'), '200'); // juros de R$ 360/mês
+    const avalanche = within(await plan.findByRole('region', { name: 'Estratégia Avalanche' }));
+    expect(avalanche.getByText('Inviável')).toBeInTheDocument();
+    expect(
+      avalanche.getByText('Com este orçamento, as dívidas não são quitadas em até 50 anos.'),
+    ).toBeInTheDocument();
+    expect(avalanche.queryByRole('list')).not.toBeInTheDocument();
   });
 
   it('edita, marca como quitada, reabre e exclui uma dívida', async () => {
@@ -299,7 +355,9 @@ describe('DebtsPage', () => {
     c = await card('Carro');
     await user.click(c.getByRole('button', { name: 'Marcar como quitada' }));
     let confirmDialog = within(await screen.findByRole('dialog', { name: 'Marcar “Carro” como quitada?' }));
-    expect(confirmDialog.getByText(/saldo restante de R\$ 800,00/)).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Marcar “Carro” como quitada?' })).toHaveTextContent(
+      /saldo restante de R\$ 800,00/,
+    );
     await user.click(confirmDialog.getByRole('button', { name: 'Marcar como quitada' }));
     await waitFor(async () => expect((await db.debts.get(debt.id))?.status).toBe('quitada'));
 

@@ -88,7 +88,7 @@ export function median(values: number[]): number {
 /** Quantas vezes por mês (em média) cada frequência acontece. */
 const MONTHLY_FACTOR: Record<Frequency, number> = {
   semanal: 52 / 12,
-  quinzenal: 26 / 12,
+  quinzenal: 2, // duas vezes por mês (ver nextOccurrence)
   mensal: 1,
   bimestral: 1 / 2,
   trimestral: 1 / 3,
@@ -213,7 +213,8 @@ export function periodPhraseStart(period: Period): string {
 /** '🛒 Mercado' (ou só o nome, sem ícone). */
 export function categoryLabel(category: { icon: string; name: string } | undefined | null): string {
   if (!category) return '❔ Sem categoria';
-  const icon = category.icon.trim();
+  // Defesa: dados antigos/importados podem não ter ícone (o tipo diz string, o IndexedDB não garante).
+  const icon = typeof category.icon === 'string' ? category.icon.trim() : '';
   return icon ? `${icon} ${category.name}` : category.name;
 }
 

@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { generateInsights } from '@/agent/insights';
+import { monthlyReport } from '@/agent/report';
 import { CATEGORY_IDS } from '@/domain/defaults';
 import type { Account, Category } from '@/domain/types';
-import { makeAccount, makeTransaction } from '@/test/factories';
+import { makeAccount, makeBudget, makeTransaction } from '@/test/factories';
 import { resetDb } from '@/test/render';
 import {
   backupCounts,
   backupFileName,
   csvDecimal,
   csvField,
+  csvText,
   downloadBackup,
   downloadCSV,
   exportBackup,
@@ -19,6 +22,7 @@ import {
   type BackupFile,
 } from './backup';
 import { DATA_TABLES, db } from './db';
+import { loadDemoData } from './demo';
 import {
   addAccount,
   addAsset,
@@ -30,8 +34,12 @@ import {
   addGoalContribution,
   addRecurring,
   addTransaction,
+  deleteBudget,
+  loadFinanceData,
   revalueAsset,
+  runRecurring,
   setBudget,
+  setTransactionStatus,
   updateSettings,
 } from './repo';
 
@@ -236,6 +244,64 @@ describe('backup: exportação, importação e limpeza', () => {
     expect(s?.dismissedInsights).toEqual({});
   });
 
+  it('configurações com campos nulos ou de tipo errado voltam ao padrão (sem derrubar Configurações)', async () => {
+    const backup = validBackup();
+    backup.data.settings = [
+      {
+        id: 'settings',
+        userName: null,
+        agentName: null,
+        emergencyFundTargetMonths: 'seis',
+        hideValues: 'sim',
+        dismissedInsights: null,
+        onboardingDone: true,
+      },
+    ];
+    expect(validateBackup(backup).ok).toBe(true);
+    await importBackup(backup, 'replace');
+    const s = await db.settings.get('settings');
+    expect(s).toMatchObject({
+      userName: '',
+      agentName: 'Pat',
+      emergencyFundTargetMonths: 6,
+      hideValues: false,
+      dismissedInsights: {},
+      onboardingDone: true,
+    });
+  });
+
+  it('importar backup sem campos não essenciais (ícone de categoria, cor de conta...) completa os padrões', async () => {
+    await loadDemoData('2026-10-01');
+    const file = throughJSON(await exportBackup()) as BackupFile;
+    const category = file.data.categories.find((c) => (c as Category).id === 'cat-alimentacao-fora') as Record<
+      string,
+      unknown
+    >;
+    delete category.icon;
+    delete category.keywords;
+    const account = file.data.accounts[0] as Record<string, unknown>;
+    delete account.icon;
+    delete account.color;
+    delete account.includeInNetWorth;
+    const tx = file.data.transactions[0] as Record<string, unknown>;
+    delete tx.notes;
+    delete tx.recurringId;
+
+    const result = validateBackup(file);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    await importBackup(result.backup, 'replace');
+
+    expect(await db.categories.get('cat-alimentacao-fora')).toMatchObject({ icon: '', keywords: [] });
+    expect(await db.accounts.get(account.id as string)).toMatchObject({ icon: '', includeInNetWorth: true });
+    expect((await db.accounts.get(account.id as string))?.color).toMatch(/^#/);
+    expect(await db.transactions.get(tx.id as string)).toMatchObject({ notes: '', recurringId: null });
+    // Antes: "Cannot read properties of undefined (reading 'trim')" no painel e no relatório, sempre.
+    const data = await loadFinanceData();
+    expect(() => generateInsights(data, '2026-10-01')).not.toThrow();
+    expect(() => monthlyReport(data, '2026-09', '2026-10-01')).not.toThrow();
+  });
+
   it('resetAllData apaga tudo e volta ao primeiro uso', async () => {
     await seedEverything();
     await resetAllData();
@@ -246,6 +312,89 @@ describe('backup: exportação, importação e limpeza', () => {
     expect(s?.onboardingDone).toBe(false);
     expect(s?.userName).toBe('');
     expect(await db.categories.get(CATEGORY_IDS.salario)).toBeDefined();
+  });
+});
+
+describe('mesclar: registros equivalentes com ids diferentes', () => {
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 8, 15, 12, 0, 0));
+    await resetDb();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a mesma ocorrência de recorrência gerada em dois aparelhos fica uma só (a paga é mantida)', async () => {
+    const banco = await addAccount(accountInput());
+    const rule = await addRecurring({
+      type: 'despesa',
+      amount: 150000,
+      description: 'Aluguel',
+      categoryId: CATEGORY_IDS.moradia,
+      accountId: banco.id,
+      frequency: 'mensal',
+      startDate: '2026-09-10',
+      endDate: null,
+      autoGenerate: true,
+      active: true,
+    });
+    const backup0 = throughJSON(await exportBackup()) as BackupFile;
+
+    // Aparelho A: em outubro gera o pendente de 10/10.
+    await importBackup(backup0, 'replace');
+    await runRecurring('2026-10-01');
+    const fromA = throughJSON(await exportBackup()) as BackupFile;
+
+    // Aparelho B: gera o mesmo pendente com outro id e o usuário já o marcou como pago.
+    await importBackup(backup0, 'replace');
+    await runRecurring('2026-10-01');
+    const octoberB = (await db.transactions.toArray()).find((t) => t.date === '2026-10-10');
+    if (!octoberB) throw new Error('pendente de outubro não gerado');
+    await setTransactionStatus(octoberB.id, 'pago');
+
+    await importBackup(fromA, 'merge');
+    const generated = (await db.transactions.where('recurringId').equals(rule.id).toArray()).sort((a, b) =>
+      a.date < b.date ? -1 : 1,
+    );
+    expect(generated.map((t) => t.date)).toEqual(['2026-09-10', '2026-10-10']);
+    expect(generated[1]).toMatchObject({ id: octoberB.id, status: 'pago' });
+
+    // Mesclar de novo não muda nada.
+    await importBackup(fromA, 'merge');
+    expect(await db.transactions.where('recurringId').equals(rule.id).count()).toBe(2);
+  });
+
+  it('orçamentos da mesma categoria e mês ficam um só (o mais recente); excluir não traz o antigo de volta', async () => {
+    const file = validBackup();
+    file.data.budgets = [
+      makeBudget({
+        id: 'b-arquivo',
+        categoryId: CATEGORY_IDS.mercado,
+        amount: 100000,
+        updatedAt: '2026-09-01T00:00:00.000Z',
+      }),
+      makeBudget({ id: 'b-outubro', categoryId: CATEGORY_IDS.mercado, amount: 120000, month: '2026-10' }),
+    ];
+    const local = await setBudget(CATEGORY_IDS.mercado, 80000, null);
+
+    await importBackup(file, 'merge');
+    const amounts = Object.fromEntries((await db.budgets.toArray()).map((b) => [b.id, b.amount]));
+    expect(amounts).toEqual({ 'b-outubro': 120000, [local.id]: 80000 });
+
+    await deleteBudget(local.id);
+    expect((await db.budgets.toArray()).map((b) => b.id)).toEqual(['b-outubro']);
+  });
+
+  it('no empate de data de edição vale a versão do arquivo', async () => {
+    const stamp = '2026-09-01T00:00:00.000Z';
+    await db.budgets.add(makeBudget({ id: 'b-local', categoryId: CATEGORY_IDS.mercado, amount: 80000, updatedAt: stamp }));
+    const file = validBackup();
+    file.data.budgets = [
+      makeBudget({ id: 'b-arquivo', categoryId: CATEGORY_IDS.mercado, amount: 100000, updatedAt: stamp }),
+    ];
+    await importBackup(file, 'merge');
+    expect((await db.budgets.toArray()).map((b) => b.id)).toEqual(['b-arquivo']);
   });
 });
 
@@ -393,11 +542,39 @@ describe('CSV de lançamentos', () => {
     expect(csv.endsWith('\r\n')).toBe(true);
     const lines = csv.slice(1).split('\r\n').filter(Boolean);
     expect(lines[0]).toBe('Data;Descrição;Tipo;Categoria;Conta;Conta de destino;Valor;Status;Parcela;Tags;Observações');
-    expect(lines[1]).toBe('01/09/2026;"Mercado ""Bom Preço""";Despesa;Mercado;"Banco; Digital";;-123,45;Pendente;2/10;casa, mês;pago no débito');
+    expect(lines[1]).toBe('01/09/2026;"Mercado ""Bom Preço""";Despesa;Mercado;"Banco; Digital";;-123,45;Pendente;2 de 10;casa, mês;pago no débito');
     expect(lines[2]).toBe('05/09/2026;Salário;Receita;Salário;"Banco; Digital";;5000,00;Pago;;;');
     expect(lines[3]).toBe('10/09/2026;Guardar;Transferência;;"Banco; Digital";Poupança;100,00;Pago;;;');
     expect(lines[4]).toBe('11/09/2026;Órfão;Despesa;Sem categoria;(conta removida);;-9,99;Pago;;;');
     expect(lines).toHaveLength(5);
+  });
+
+  it('textos que começam com = + - @ não viram fórmula; parcela sai como "1 de 12" (e não a data 01/dez)', () => {
+    expect(csvText('=1+1')).toBe("'=1+1");
+    expect(csvText('- ajuste')).toBe("'- ajuste");
+    expect(csvText('normal')).toBe('normal');
+    expect(csvText('@casa;x')).toBe(`"'@casa;x"`);
+    const csv = transactionsToCSV(
+      [
+        makeTransaction({
+          id: 'f1',
+          accountId: 'a3',
+          amount: 1000,
+          date: '2026-10-01',
+          description: '=HYPERLINK("http://x","clique")',
+          categoryId: null,
+          tags: ['@casa'],
+          notes: '-ajuste',
+          installment: { groupId: 'g', number: 1, total: 12 },
+        }),
+      ],
+      categories,
+      [makeAccount({ id: 'a3', name: '+Conta' })],
+    );
+    const line = csv.slice(1).split('\r\n')[1];
+    expect(line).toBe(
+      `01/10/2026;"'=HYPERLINK(""http://x"",""clique"")";Despesa;;'+Conta;;-10,00;Pago;1 de 12;'@casa;'-ajuste`,
+    );
   });
 
   it('sem lançamentos gera só o cabeçalho', () => {

@@ -123,7 +123,8 @@ const HISTORY_EXPENSES: [string, number][] = [
 ];
 
 /**
- * Jul–set: renda 10.000, despesas 7.000 (sobra média 3.000; necessidades 4.000 => meta de reserva 24.000).
+ * Jul–set: renda 10.000, despesas 7.000, das quais 2.000 são aportes em Investimentos e reserva
+ * (sobra média 5.000 — aporte não é gasto; necessidades 4.000 => meta de reserva 24.000).
  * Outubro: renda 10.000, despesas pagas 6.000 e uma pendente de 1.000 no dia 31.
  * Saldo da corrente: 9.000 + 4.000 = 13.000; previsto no fim do mês: 12.000.
  * Reserva: corrente 13.000 + investimentos 20.000 = 33.000 (completa).
@@ -158,11 +159,11 @@ describe('affordability', () => {
       verdict: 'sim',
       projectedEndBalance: 1200000,
       balanceAfter: 1000000,
-      averageMonthlySurplus: 300000,
+      averageMonthlySurplus: 500000,
     });
     expect(r.reasons).toEqual([
       'Seu saldo previsto para o fim do mês é R$ 12.000,00; depois da compra, ficaria em R$ 10.000,00.',
-      'Sua sobra média nos últimos meses é de R$ 3.000,00 por mês.',
+      'Sua sobra média nos últimos meses é de R$ 5.000,00 por mês.',
       'Sua reserva de emergência está completa.',
     ]);
   });
@@ -188,12 +189,12 @@ describe('affordability', () => {
   });
 
   it('parcela maior que a sobra média => não, mesmo com saldo positivo', () => {
-    const r = affordability(scenario(), TODAY, 1200000, 3);
-    expect(r.firstPayment).toBe(400000);
-    expect(r.balanceAfter).toBe(800000);
+    const r = affordability(scenario(), TODAY, 1800000, 3);
+    expect(r.firstPayment).toBe(600000);
+    expect(r.balanceAfter).toBe(600000);
     expect(r.verdict).toBe('nao');
     expect(r.reasons).toContain(
-      'A parcela de R$ 4.000,00 é maior que sua sobra média de R$ 3.000,00 por mês.',
+      'A parcela de R$ 6.000,00 é maior que sua sobra média de R$ 5.000,00 por mês.',
     );
   });
 
@@ -201,7 +202,42 @@ describe('affordability', () => {
     const r = affordability(scenario(), TODAY, 600000, 3);
     expect(r.verdict).toBe('sim');
     expect(r.reasons[0]).toContain('depois da 1ª parcela');
-    expect(r.reasons).toContain('A parcela de R$ 2.000,00 cabe na sua sobra média de R$ 3.000,00 por mês.');
+    expect(r.reasons).toContain('A parcela de R$ 2.000,00 cabe na sua sobra média de R$ 5.000,00 por mês.');
+  });
+
+  it('o primeiro mês parcial não infla a sobra média (gastos extrapolados pelos dias registrados)', () => {
+    // Começou em 20/09: salário de 5.000 em 05/09 e R$ 100,00 por dia de mercado de 20 a 30/09.
+    const data = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 400000, createdAt: '2026-09-20T12:00:00.000Z' })],
+      transactions: [
+        makeTransaction({ accountId: 'cc', type: 'receita', amount: 500000, date: '2026-09-05', categoryId: 'cat-salario' }),
+        ...Array.from({ length: 11 }, (_, i) =>
+          makeTransaction({ accountId: 'cc', amount: 10000, date: `2026-09-${20 + i}` }),
+        ),
+      ],
+    });
+    const r = affordability(data, '2026-10-01', 600000, 3);
+    // Antes: sobra média de R$ 3.900,00 e veredito 'sim'; no ritmo real sobram ~R$ 2.000,00.
+    expect(r.averageMonthlySurplus).toBe(200000);
+    expect(r.verdict).not.toBe('sim');
+  });
+
+  it('aportes em Investimentos e reserva não contam como gasto na sobra média', () => {
+    // Jul–set: renda 5.000, moradia 3.000 e 2.000 investidos todo mês.
+    const data = makeData({
+      accounts: [makeAccount({ id: 'cc', initialBalance: 1000000 })],
+      transactions: ['2026-07', '2026-08', '2026-09'].flatMap((m) =>
+        monthTx(m, 500000, [
+          ['cat-moradia', 300000],
+          ['cat-investimentos', 200000],
+        ]),
+      ),
+    });
+    const r = affordability(data, '2026-10-01', 60000, 3);
+    // Antes: sobra 0, veredito 'nao' e "suas despesas igualaram suas receitas".
+    expect(r.averageMonthlySurplus).toBe(200000);
+    expect(r.verdict).not.toBe('nao');
+    expect(r.reasons).toContain('A parcela de R$ 200,00 cabe na sua sobra média de R$ 2.000,00 por mês.');
   });
 
   it('primeira parcela leva os centavos extras (como o parcelamento do app)', () => {
