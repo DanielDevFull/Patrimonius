@@ -1,9 +1,8 @@
 import { useId, useMemo, useState } from 'react';
 import { affordability } from '@/analytics';
-import { Field, Input, Money, MoneyInput, cn } from '@/components/ui';
+import { Field, Input, Money, MoneyInput, cn, MoneyText } from '@/components/ui';
 import type { Cents, FinanceData, ISODate } from '@/domain/types';
-import { parsePositiveInt } from './shared/format';
-import { MoneyText } from './shared/MoneyText';
+import { parsePositiveInt } from '@/domain/format';
 import { VERDICT_META } from './simulator-utils';
 import { SimCard, SimEmpty } from './SimLayout';
 

@@ -2,10 +2,9 @@ import { Bot, Lightbulb, MessageCircle, OctagonAlert, PartyPopper, Sparkles, Tri
 import { useState } from 'react';
 import type { Insight, InsightSeverity } from '@/agent';
 import { ROUTES } from '@/app/navigation';
-import { Badge, Card, CardHeader, cn, IconButton, useToast, type BadgeTone } from '@/components/ui';
+import { Badge, Card, CardHeader, cn, IconButton, useToast, type BadgeTone, MoneyText } from '@/components/ui';
 import { dismissInsight } from '@/db/repo';
 import type { MonthKey } from '@/domain/types';
-import { MoneyText } from '../MoneyText';
 import { LinkButton } from './shared';
 
 const SEVERITY: Record<InsightSeverity, { label: string; icon: LucideIcon; tone: BadgeTone; iconClass: string }> = {

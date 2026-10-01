@@ -7,7 +7,7 @@ import { addAccount, addDebt, addDebtPayment } from '@/db/repo';
 import { CATEGORY_IDS } from '@/domain/defaults';
 import { formatBRL } from '@/domain/money';
 import type { Debt } from '@/domain/types';
-import { formatDuration } from '@/features/simulators/shared/format';
+import { formatDuration } from '@/domain/format';
 import { renderWithProviders, resetDb } from '@/test/render';
 import DebtsPage from './DebtsPage';
 

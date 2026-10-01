@@ -24,7 +24,8 @@ const TONES: Record<Exclude<ProgressTone, 'auto'>, string> = {
 };
 
 export function ProgressBar({ value, tone = 'auto', size = 'md', className, label }: ProgressBarProps) {
-  const safe = Number.isFinite(value) ? Math.max(0, value) : 1;
+  // +Infinity (ex.: gasto com orçamento zero) conta como estourado; NaN/-Infinity como vazio.
+  const safe = Number.isFinite(value) ? Math.max(0, value) : value > 0 ? 2 : 0;
   const resolved: Exclude<ProgressTone, 'auto'> =
     tone === 'auto' ? (safe > 1 ? 'negative' : safe >= 0.8 ? 'warning' : 'positive') : tone;
   return (

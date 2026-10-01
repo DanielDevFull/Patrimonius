@@ -4,7 +4,7 @@ import { capitalize } from '@/domain/text';
 import type { Cents } from '@/domain/types';
 import { ChartTooltip } from './ChartTooltip';
 import { axisReaisFormatter } from './format';
-import { useChartTheme, useHideValues } from './theme';
+import { useChartTheme, useHideValues } from '@/components/charts/theme';
 
 export interface BarDatum {
   /** Chave do eixo X (por padrão um MonthKey 'YYYY-MM'). */

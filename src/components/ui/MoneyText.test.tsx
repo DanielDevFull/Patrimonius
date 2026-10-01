@@ -1,6 +1,6 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { MoneyText } from './MoneyText';
+import { MoneyText } from '@/components/ui';
 
 describe('MoneyText', () => {
   it('marca cada valor em reais com a classe money, preservando o texto', () => {

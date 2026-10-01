@@ -1,9 +1,8 @@
 import { Bot } from 'lucide-react';
 import { useMemo } from 'react';
 import { monthlyReport } from '@/agent';
-import { Card, MonthPicker } from '@/components/ui';
+import { Card, MonthPicker, MoneyText } from '@/components/ui';
 import type { FinanceData, ISODate, MonthKey } from '@/domain/types';
-import { MoneyText } from '../../dashboard/MoneyText';
 import { AgentCards } from '../AgentCards';
 
 export interface ClosingTabProps {

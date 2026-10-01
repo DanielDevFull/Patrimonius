@@ -1,11 +1,10 @@
 import type { AgentCard, CardTone } from '@/agent';
-import { Card, CardHeader, cn, Money, ProgressBar, StatCard } from '@/components/ui';
+import { Card, CardHeader, cn, Money, ProgressBar, StatCard, MoneyText } from '@/components/ui';
 import { formatPercent } from '@/domain/money';
 import { CategoryDonut } from '../dashboard/charts/CategoryDonut';
 import { MonthlyBarChart } from '../dashboard/charts/MonthlyBarChart';
-import { useChartTheme } from '../dashboard/charts/theme';
+import { useChartTheme } from '@/components/charts/theme';
 import type { DonutSlice } from '../dashboard/dashboard-utils';
-import { MoneyText } from '../dashboard/MoneyText';
 
 const TONE_TEXT: Record<CardTone, string> = {
   positive: 'text-emerald-700 dark:text-emerald-400',

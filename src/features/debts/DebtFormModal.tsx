@@ -5,7 +5,7 @@ import { Button, Field, Input, Modal, Money, MoneyInput, Select, Textarea, useTo
 import { addDebt, updateDebt } from '@/db/repo';
 import { formatDateBR } from '@/domain/dates';
 import { DEBT_TYPE_LABELS, type Debt, type DebtPayment, type DebtType, type ISODate } from '@/domain/types';
-import { formatRate, parsePercent } from '@/features/simulators/shared/format';
+import { formatRate, parsePercent } from '@/domain/format';
 import {
   DEBT_FORM_ORDER,
   annualInputToMonthly,

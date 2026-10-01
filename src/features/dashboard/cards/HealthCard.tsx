@@ -1,9 +1,8 @@
 import { HeartPulse, Info } from 'lucide-react';
 import type { HealthReport } from '@/analytics';
-import { Badge, Card, CardHeader, ProgressBar, type BadgeTone } from '@/components/ui';
+import { Badge, Card, CardHeader, ProgressBar, type BadgeTone, MoneyText } from '@/components/ui';
 import { HealthGauge } from '../charts/HealthGauge';
 import { componentTone, HEALTH_GRADE_LABELS, weakestComponent } from '../dashboard-utils';
-import { MoneyText } from '../MoneyText';
 
 const GRADE_TONE: Record<HealthReport['grade'], BadgeTone> = {
   excelente: 'positive',

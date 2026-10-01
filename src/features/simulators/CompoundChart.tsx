@@ -4,7 +4,7 @@ import type { GrowthPoint } from '@/analytics';
 import { Money } from '@/components/ui';
 import { formatBRLCompact } from '@/domain/money';
 import { plural } from '@/domain/text';
-import { ChartDataTable, ChartFrame, ChartTooltipBox } from './shared/ChartParts';
+import { ChartDataTable, ChartFrame, ChartTooltipBox } from '@/components/charts/ChartParts';
 import {
   AXIS_TICK,
   CHART_AXIS,
@@ -13,8 +13,8 @@ import {
   CROSSHAIR,
   SERIES_COLORS,
   activeRow,
-} from './shared/chart-theme';
-import { formatDuration } from './shared/format';
+} from '@/components/charts/chart-theme';
+import { formatDuration } from '@/domain/format';
 import { yearTicks, yearlyPoints } from './simulator-utils';
 
 const TOTAL = { label: 'Total acumulado', color: SERIES_COLORS.primary };

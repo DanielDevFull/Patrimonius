@@ -19,11 +19,12 @@ Todos os dados são digitados manualmente pelo usuário e ficam no IndexedDB do 
 
 ```
 src/
-  domain/      types.ts (modelo), money.ts, dates.ts, text.ts, defaults.ts (categorias padrão, CATEGORY_IDS)
+  domain/      types.ts (modelo), money.ts, dates.ts, text.ts, format.ts (taxas/durações), defaults.ts (CATEGORY_IDS)
   db/          db.ts (Dexie), repo.ts (CRUD + regras), hooks.ts (useFinanceData, useSettings, useToday...), backup.ts, demo.ts
   analytics/   cálculos puros: saldos, resumos, orçamentos, recorrências, previsão, dívidas, metas, patrimônio, saúde
   agent/       NLU pt-BR, categorizador, insights, respostas do chat, relatório mensal
-  components/  ui/ (kit: Button, Card, Modal, Field, MoneyInput, Money, ProgressBar...), layout/AppShell
+  components/  ui/ (kit: Button, Card, Modal, Field, MoneyInput, Money, MoneyText, ProgressBar, ActionsMenu...),
+               charts/ (tema e peças de gráficos Recharts), layout/AppShell
   features/    uma pasta por página (default export do componente da página)
   app/         router (HashRouter), navigation (ROUTES), tema
   test/        setup.ts, factories.ts (makeData, makeAccount, makeTransaction...)
@@ -34,7 +35,9 @@ src/
 - TypeScript estrito; alias `@/` = `src/`. Sem `any`.
 - Estilo: Tailwind v4 (classes utilitárias), modo escuro via variante `dark:`. Cor da marca: `brand-*` (teal).
 - Use o kit `@/components/ui` em vez de recriar botões/inputs/modais. Feedback: `useToast()` e `useConfirm()`.
-- Valores na tela sempre com `<Money value={cents} />` (respeita o modo "ocultar valores").
+- Valores na tela sempre com `<Money value={cents} />` (respeita o modo "ocultar valores"). Textos prontos que
+  contêm valores (insights, respostas do Pat, relatórios) devem ser exibidos com `<MoneyText text={...} />`.
+- Gráficos: use `@/components/charts` (tema claro/escuro, tooltip, tabela de dados acessível).
 - Rotas: use `ROUTES` e `newTransactionPath()` de `@/app/navigation`.
 - Testes com Vitest + Testing Library (`*.test.ts(x)` ao lado do código). Use `@/test/factories`.
 

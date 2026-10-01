@@ -37,6 +37,8 @@ export function Modal({ open, onClose, title, description, children, footer, siz
     document.body.style.overflow = 'hidden';
     // Foca o primeiro campo do modal.
     const t = window.setTimeout(() => {
+      // Não rouba o foco se o usuário já está interagindo dentro do modal.
+      if (panelRef.current?.contains(document.activeElement)) return;
       const el = panelRef.current?.querySelector<HTMLElement>(
         'input:not([type=hidden]), select, textarea, button[data-autofocus]',
       );

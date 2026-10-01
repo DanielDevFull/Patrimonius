@@ -97,7 +97,13 @@ export type AgentCard =
       title: string;
       items: { label: string; current: Cents; target: Cents; hint?: string; tone?: CardTone }[];
     }
-  | { type: 'chart'; title: string; chart: 'bar' | 'pie'; data: { label: string; value: number; color?: string }[] };
+  | {
+      type: 'chart';
+      title: string;
+      chart: 'bar' | 'pie';
+      /** `value` em CENTAVOS (Cents); a interface formata com formatBRL/<Money>. */
+      data: { label: string; value: number; color?: string }[];
+    };
 
 export interface TransactionDraft {
   type: TransactionType;

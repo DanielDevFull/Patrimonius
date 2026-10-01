@@ -38,12 +38,29 @@ type Patch<T> = Partial<Omit<T, 'id' | 'createdAt' | 'updatedAt'>>;
 /* Inicialização                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Garante categorias padrão e registro de configurações. Idempotente. */
+/**
+ * Categorias usadas diretamente pelo código (aportes, pagamentos de dívida, substituição ao excluir).
+ * Não podem ser excluídas e são recriadas se faltarem (ex.: backup importado sem elas).
+ */
+export const SYSTEM_CATEGORY_IDS: readonly ID[] = [
+  CATEGORY_IDS.outrosDespesa,
+  CATEGORY_IDS.outrosReceita,
+  CATEGORY_IDS.investimentos,
+  CATEGORY_IDS.dividas,
+];
+
+/** Garante categorias padrão (e as de sistema) e registro de configurações. Idempotente. */
 export async function ensureInitialized(): Promise<void> {
   await db.transaction('rw', db.categories, db.settings, async () => {
     const now = nowTimestamp();
     if ((await db.categories.count()) === 0) {
       await db.categories.bulkAdd(buildDefaultCategories(now));
+    } else {
+      const existing = new Set(await db.categories.toCollection().primaryKeys());
+      const missing = buildDefaultCategories(now).filter(
+        (c) => SYSTEM_CATEGORY_IDS.includes(c.id) && !existing.has(c.id),
+      );
+      if (missing.length) await db.categories.bulkAdd(missing);
     }
     if (!(await db.settings.get('settings'))) {
       await db.settings.add(buildDefaultSettings(now));
@@ -180,9 +197,15 @@ export async function updateCategory(id: ID, patch: Patch<Category>): Promise<vo
 export async function deleteCategory(id: ID, replacementId?: ID): Promise<void> {
   const category = await db.categories.get(id);
   if (!category) return;
+  if (SYSTEM_CATEGORY_IDS.includes(id)) {
+    throw new Error('Esta categoria é usada pelo app e não pode ser excluída. Você pode arquivá-la.');
+  }
   const fallback =
     replacementId ?? (category.kind === 'despesa' ? CATEGORY_IDS.outrosDespesa : CATEGORY_IDS.outrosReceita);
-  if (fallback === id) throw new Error('Não é possível excluir a categoria padrão de "outros".');
+  if (fallback === id) throw new Error('Escolha outra categoria para receber os lançamentos.');
+  const replacement = await db.categories.get(fallback);
+  if (!replacement) throw new Error('Categoria substituta não encontrada.');
+  if (replacement.kind !== category.kind) throw new Error('A categoria substituta precisa ser do mesmo tipo.');
   await db.transaction('rw', [db.categories, db.transactions, db.recurring, db.budgets], async () => {
     const now = nowTimestamp();
     await db.transactions.where('categoryId').equals(id).modify({ categoryId: fallback, updatedAt: now });
@@ -325,6 +348,11 @@ export async function addRecurring(input: Omit<EntityInput<RecurringRule>, 'next
   return (await db.recurring.get(rule.id)) ?? rule;
 }
 
+/** Lançamentos gerados por uma regra de recorrência (ordenados por data). */
+export async function listRecurringTransactions(ruleId: ID): Promise<Transaction[]> {
+  return db.transactions.where('recurringId').equals(ruleId).sortBy('date');
+}
+
 export async function updateRecurring(id: ID, patch: Patch<RecurringRule>): Promise<void> {
   await db.recurring.update(id, { ...patch, updatedAt: nowTimestamp() });
 }
@@ -463,10 +491,7 @@ export async function addGoalContribution(input: ContributionInput): Promise<Goa
     createdAt: nowTimestamp(),
   };
   await db.goalContributions.add(contribution);
-  const all = await db.goalContributions.where('goalId').equals(input.goalId).toArray();
-  const saved = all.reduce((s, c) => s + c.amount, 0);
-  if (goal.status === 'ativa' && saved >= goal.targetAmount) await updateGoal(goal.id, { status: 'concluida' });
-  if (goal.status === 'concluida' && saved < goal.targetAmount) await updateGoal(goal.id, { status: 'ativa' });
+  await syncGoalStatus(goal.id);
   return contribution;
 }
 
@@ -476,6 +501,17 @@ export async function deleteGoalContribution(id: ID, alsoDeleteTransaction = fal
   if (!c) return;
   if (alsoDeleteTransaction && c.transactionId) await db.transactions.delete(c.transactionId);
   await db.goalContributions.delete(id);
+  await syncGoalStatus(c.goalId);
+}
+
+/** Ajusta 'ativa' <-> 'concluida' conforme o total guardado (não mexe em metas pausadas). */
+export async function syncGoalStatus(goalId: ID): Promise<void> {
+  const goal = await db.goals.get(goalId);
+  if (!goal || goal.status === 'pausada') return;
+  const all = await db.goalContributions.where('goalId').equals(goalId).toArray();
+  const saved = all.reduce((sum, x) => sum + x.amount, 0);
+  const next = saved >= goal.targetAmount ? 'concluida' : 'ativa';
+  if (next !== goal.status) await updateGoal(goalId, { status: next });
 }
 
 /* ------------------------------------------------------------------ */
@@ -489,8 +525,23 @@ export async function addDebt(input: EntityInput<Debt>): Promise<Debt> {
   return debt;
 }
 
+/**
+ * Atualiza a dívida. Se o saldo ou a data do saldo mudarem (e o status não vier explícito no patch),
+ * o status é recalculado: saldo restante <= 0 => 'quitada', senão 'ativa'.
+ */
 export async function updateDebt(id: ID, patch: Patch<Debt>): Promise<void> {
-  await db.debts.update(id, { ...patch, updatedAt: nowTimestamp() });
+  const next: Patch<Debt> = { ...patch };
+  if ((patch.balance !== undefined || patch.balanceDate !== undefined) && patch.status === undefined) {
+    const debt = await db.debts.get(id);
+    if (debt) {
+      const balance = patch.balance ?? debt.balance;
+      const balanceDate = patch.balanceDate ?? debt.balanceDate;
+      const payments = await db.debtPayments.where('debtId').equals(id).toArray();
+      const paid = payments.filter((p) => p.date >= balanceDate).reduce((sum, p) => sum + p.amount, 0);
+      next.status = balance - paid > 0 ? 'ativa' : 'quitada';
+    }
+  }
+  await db.debts.update(id, { ...next, updatedAt: nowTimestamp() });
 }
 
 export async function deleteDebt(id: ID): Promise<void> {
@@ -560,7 +611,10 @@ export async function deleteDebtPayment(id: ID, alsoDeleteTransaction = false): 
 /* Bens                                                                */
 /* ------------------------------------------------------------------ */
 
-/** Cria um bem e registra a primeira avaliação (na data de hoje ou de aquisição, a mais antiga das duas). */
+/**
+ * Cria um bem e registra a primeira avaliação em `valuationDate` (padrão: hoje).
+ * Antes dela, o histórico de patrimônio usa acquisitionValue ?? value.
+ */
 export async function addAsset(input: EntityInput<Asset>, valuationDate: ISODate = todayISO()): Promise<Asset> {
   const now = nowTimestamp();
   const asset: Asset = { ...input, id: newId(), createdAt: now, updatedAt: now };
@@ -595,6 +649,19 @@ export async function revalueAsset(id: ID, value: number, date: ISODate = todayI
   return valuation;
 }
 
+/** Exclui uma avaliação e recalcula o valor atual do bem pela avaliação mais recente restante. */
+export async function deleteAssetValuation(id: ID): Promise<void> {
+  await db.transaction('rw', db.assets, db.assetValuations, async () => {
+    const valuation = await db.assetValuations.get(id);
+    if (!valuation) return;
+    await db.assetValuations.delete(id);
+    const rest = await db.assetValuations.where('assetId').equals(valuation.assetId).toArray();
+    if (!rest.length) return;
+    const latest = rest.reduce((a, b) => (b.date > a.date || (b.date === a.date && b.createdAt >= a.createdAt) ? b : a));
+    await db.assets.update(valuation.assetId, { value: latest.value, updatedAt: nowTimestamp() });
+  });
+}
+
 export async function deleteAsset(id: ID): Promise<void> {
   await db.transaction('rw', db.assets, db.assetValuations, async () => {
     await db.assetValuations.where('assetId').equals(id).delete();
@@ -606,8 +673,18 @@ export async function deleteAsset(id: ID): Promise<void> {
 /* Conversa com o agente                                               */
 /* ------------------------------------------------------------------ */
 
+let lastChatStamp = '';
+
+/** Carimbo estritamente crescente (mensagens no mesmo milissegundo mantêm a ordem de criação). */
+function nextChatStamp(): string {
+  let stamp = nowTimestamp();
+  if (stamp <= lastChatStamp) stamp = new Date(Date.parse(lastChatStamp) + 1).toISOString();
+  lastChatStamp = stamp;
+  return stamp;
+}
+
 export async function addChatMessage(role: ChatMessage['role'], text: string, payload: unknown = null): Promise<ChatMessage> {
-  const msg: ChatMessage = { id: newId(), role, text, payload, createdAt: nowTimestamp() };
+  const msg: ChatMessage = { id: newId(), role, text, payload, createdAt: nextChatStamp() };
   await db.chat.add(msg);
   return msg;
 }

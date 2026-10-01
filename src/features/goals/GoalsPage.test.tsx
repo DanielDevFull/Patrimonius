@@ -83,7 +83,7 @@ describe('GoalsPage', () => {
     expect(dialog.getByText(/Para chegar lá em 6 meses/)).toHaveTextContent('guarde cerca de R$ 2.000,00 por mês');
     await user.click(dialog.getByRole('button', { name: 'Usar ✈️' }));
     expect(dialog.getByLabelText('Emoji')).toHaveValue('✈️');
-    await user.click(dialog.getByRole('radio', { name: '#7c3aed' }));
+    await user.click(dialog.getByRole('radio', { name: 'Violeta' }));
     await user.selectOptions(dialog.getByLabelText('Prioridade'), 'alta');
     const accountSelect = dialog.getByLabelText('Conta onde o dinheiro fica (opcional)');
     expect(within(accountSelect).queryByRole('option', { name: /Cartão/ })).not.toBeInTheDocument();

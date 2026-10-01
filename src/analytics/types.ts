@@ -84,7 +84,8 @@ export interface BudgetStatus {
   /** spent / budgeted (0 quando budgeted = 0 e spent = 0; Infinity se budgeted = 0 e spent > 0). */
   percent: number;
   /**
-   * Projeção para o fim do mês. Mês corrente: spent / diasDecorridos * diasNoMês (arredondado).
+   * Projeção para o fim do mês. Mês corrente: ritmo diário aplicado só aos gastos variáveis até today
+   * (round(variáveis / diasDecorridos * diasNoMês)) + gastos fixos (recorrência/parcela) e com data futura, pelo valor real.
    * Mês passado: spent. Mês futuro: spent.
    */
   projected: Cents;
@@ -205,7 +206,7 @@ export interface PayoffPlan {
   strategy: PayoffStrategy;
   /** false se o orçamento não cobre os mínimos ou se alguma dívida nunca diminui dentro de maxMonths. */
   feasible: boolean;
-  /** Meses até quitar tudo (ou maxMonths se inviável). */
+  /** Meses até quitar tudo (ou maxMonths se nunca quitar dentro do limite). feasible=false também quando algum mês não cobriu os mínimos. */
   months: number;
   totalInterest: Cents;
   totalPaid: Cents;

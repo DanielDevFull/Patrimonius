@@ -3,7 +3,7 @@ import { Money } from '@/components/ui';
 import type { Cents } from '@/domain/types';
 import type { DonutSlice } from '../dashboard-utils';
 import { ChartTooltip } from './ChartTooltip';
-import { useChartTheme } from './theme';
+import { useChartTheme } from '@/components/charts/theme';
 
 export interface CategoryDonutProps {
   slices: DonutSlice[];

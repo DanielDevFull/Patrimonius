@@ -58,7 +58,7 @@ describe('AccountsPage', () => {
     await user.selectOptions(dialog.getByLabelText('Tipo'), 'poupanca');
     expect(dialog.getByLabelText('Emoji')).toHaveValue('🐷');
     await user.type(dialog.getByLabelText('Saldo inicial'), '-150,25');
-    await user.click(dialog.getByRole('radio', { name: '#7c3aed' }));
+    await user.click(dialog.getByRole('radio', { name: 'Violeta' }));
     await user.click(dialog.getByRole('button', { name: 'Salvar' }));
 
     expect(await screen.findByText('Conta criada.')).toBeInTheDocument();

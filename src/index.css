@@ -48,3 +48,8 @@
   filter: blur(7px);
   user-select: none;
 }
+/* Em SVG (eixos/rótulos de gráficos) o blur não é confiável: o texto fica transparente. */
+.hide-values svg .money,
+.hide-values svg text.money {
+  fill: transparent;
+}

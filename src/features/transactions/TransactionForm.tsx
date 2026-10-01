@@ -196,10 +196,11 @@ function TransactionFormBody({ onClose, initial, transaction, onSaved, data, tod
   const deferredDescription = useDeferredValue(description);
   const suggestion = useMemo(
     () =>
-      kind && !categoryTouched && deferredDescription.trim()
+      // `description` também precisa estar preenchida: após "Salvar e novo" o valor adiado ainda traz o texto antigo.
+      kind && !categoryTouched && description.trim() && deferredDescription.trim()
         ? suggestCategory(deferredDescription, kind, data.categories, data.transactions)
         : null,
-    [kind, categoryTouched, deferredDescription, data.categories, data.transactions],
+    [kind, categoryTouched, description, deferredDescription, data.categories, data.transactions],
   );
   const rawCategoryId = kind
     ? categoryTouched

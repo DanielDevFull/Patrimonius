@@ -35,31 +35,9 @@ export function greetingLine(hour: number, userName: string | null | undefined):
 /* Valores dentro de textos do agente                                  */
 /* ------------------------------------------------------------------ */
 
-export interface TextPart {
-  text: string;
-  /** true quando o trecho é um valor em reais (recebe a classe .money para o modo "ocultar valores"). */
-  money: boolean;
-}
 
 /** 'R$ 1.234,56', '-R$ 50,00', '+R$ 10,00', 'R$ 1,2 mi', 'R$ 3 mil'. */
-const MONEY_IN_TEXT = /[+-]?R\$\s?\d{1,3}(?:\.\d{3})*(?:,\d+)?(?:\s(?:mil|mi|bi|tri)\b)?/g;
 
-/**
- * Separa um texto (ex.: mensagem de insight, parágrafo do relatório) em trechos normais e trechos de valor em reais,
- * para que os valores possam ser borrados no modo privacidade sem esconder a frase inteira.
- */
-export function splitMoneyText(text: string): TextPart[] {
-  const parts: TextPart[] = [];
-  let last = 0;
-  for (const match of text.matchAll(MONEY_IN_TEXT)) {
-    const start = match.index ?? 0;
-    if (start > last) parts.push({ text: text.slice(last, start), money: false });
-    parts.push({ text: match[0], money: true });
-    last = start + match[0].length;
-  }
-  if (last < text.length) parts.push({ text: text.slice(last), money: false });
-  return parts;
-}
 
 /* ------------------------------------------------------------------ */
 /* Gastos por categoria (rosca)                                        */

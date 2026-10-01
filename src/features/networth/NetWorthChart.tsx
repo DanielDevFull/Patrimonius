@@ -3,7 +3,7 @@ import { Area, AreaChart, CartesianGrid, ReferenceLine, Tooltip, XAxis, YAxis } 
 import { formatMonthLong } from '@/domain/dates';
 import { formatBRLCompact } from '@/domain/money';
 import { capitalize } from '@/domain/text';
-import { ChartDataTable, ChartFrame, ChartTooltipBox } from '@/features/simulators/shared/ChartParts';
+import { ChartDataTable, ChartFrame, ChartTooltipBox } from '@/components/charts/ChartParts';
 import {
   AXIS_TICK,
   CHART_AXIS,
@@ -12,7 +12,7 @@ import {
   CROSSHAIR,
   SERIES_COLORS,
   activeRow,
-} from '@/features/simulators/shared/chart-theme';
+} from '@/components/charts/chart-theme';
 import type { HistoryRow } from './networth-utils';
 
 const COLOR = SERIES_COLORS.brand;

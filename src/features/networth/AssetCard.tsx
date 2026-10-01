@@ -16,7 +16,7 @@ import {
 import { Badge, Button, Card, IconButton, Money, cn } from '@/components/ui';
 import { formatDateBR } from '@/domain/dates';
 import { ASSET_TYPE_LABELS, type Asset, type AssetType, type AssetValuation } from '@/domain/types';
-import { formatSignedPercent } from '@/features/simulators/shared/format';
+import { formatSignedPercent } from '@/domain/format';
 import { assetVariation } from './networth-utils';
 
 const ASSET_ICONS: Record<AssetType, LucideIcon> = {

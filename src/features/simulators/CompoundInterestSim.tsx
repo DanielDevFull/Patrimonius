@@ -4,7 +4,7 @@ import { annualToMonthlyRate } from '@/analytics';
 import { Field, Input, Money, MoneyInput, StatCard } from '@/components/ui';
 import type { Cents } from '@/domain/types';
 import { CompoundChart } from './CompoundChart';
-import { formatDuration, formatRate, parsePercent, parsePositiveInt } from './shared/format';
+import { formatDuration, formatRate, parsePercent, parsePositiveInt } from '@/domain/format';
 import { MAX_YEARS, compoundSimulation } from './simulator-utils';
 import { SimCard, SimEmpty } from './SimLayout';
 

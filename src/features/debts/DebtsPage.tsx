@@ -18,7 +18,7 @@ import { formatDateBR } from '@/domain/dates';
 import { formatBRL } from '@/domain/money';
 import { plural } from '@/domain/text';
 import type { Debt, DebtPayment, ID } from '@/domain/types';
-import { formatRate } from '@/features/simulators/shared/format';
+import { formatRate } from '@/domain/format';
 import { DebtCard } from './DebtCard';
 import { DebtFormModal } from './DebtFormModal';
 import { isHighInterest, paymentsOf } from './debt-utils';

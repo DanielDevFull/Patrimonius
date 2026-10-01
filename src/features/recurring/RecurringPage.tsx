@@ -2,21 +2,7 @@ import { Pause, Pencil, Play, Plus, Repeat, Sparkles, Trash2 } from 'lucide-reac
 import { useMemo, useState } from 'react';
 import { detectRecurringCandidates } from '@/analytics/recurring';
 import type { RecurringCandidate } from '@/analytics/types';
-import {
-  Badge,
-  Button,
-  Card,
-  CardHeader,
-  EmptyState,
-  Modal,
-  Money,
-  PageHeader,
-  SegmentedControl,
-  Spinner,
-  StatCard,
-  useConfirm,
-  useToast,
-} from '@/components/ui';
+import { Badge, Button, Card, CardHeader, EmptyState, Modal, Money, PageHeader, SegmentedControl, Spinner, StatCard, useConfirm, useToast, ActionsMenu } from '@/components/ui';
 import { useFinanceData, useToday } from '@/db/hooks';
 import { deleteRecurring, runRecurring, updateRecurring } from '@/db/repo';
 import { formatDateBR, formatDateRelative, parseISO } from '@/domain/dates';
@@ -29,7 +15,6 @@ import {
   type ISODate,
   type RecurringRule,
 } from '@/domain/types';
-import { ActionsMenu } from '@/features/transactions/ActionsMenu';
 import { RecurringFormModal, type RecurringFormInitial } from './RecurringFormModal';
 import {
   isEnded,

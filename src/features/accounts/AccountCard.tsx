@@ -1,8 +1,7 @@
 import { ArchiveRestore, ArrowLeftRight, CalendarClock, Pencil, Scale, Trash2 } from 'lucide-react';
-import { Badge, Button, Card, cn, Money, ProgressBar } from '@/components/ui';
+import { Badge, Button, Card, cn, Money, ProgressBar, ActionsMenu, type ActionsMenuItem } from '@/components/ui';
 import { formatDateShort } from '@/domain/dates';
 import { ACCOUNT_TYPE_LABELS, type Account, type ISODate } from '@/domain/types';
-import { ActionsMenu, type ActionsMenuItem } from '@/features/transactions/ActionsMenu';
 import { cardInfo, type AccountBalanceView } from './account-utils';
 
 export interface AccountCardProps {

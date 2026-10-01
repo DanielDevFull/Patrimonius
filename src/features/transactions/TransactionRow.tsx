@@ -1,8 +1,7 @@
 import { ArrowLeftRight, CheckCircle2, Copy, Repeat, RotateCcw, Trash2 } from 'lucide-react';
 import { memo } from 'react';
-import { Badge, Money } from '@/components/ui';
+import { Badge, Money, ActionsMenu } from '@/components/ui';
 import type { Account, Category, ISODate, Transaction } from '@/domain/types';
-import { ActionsMenu } from './ActionsMenu';
 
 export interface TransactionRowProps {
   tx: Transaction;

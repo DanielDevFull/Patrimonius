@@ -2,7 +2,7 @@ import { CalendarCheck, Lightbulb } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 import { Field, Input, Money, MoneyInput } from '@/components/ui';
 import type { Cents, ISODate } from '@/domain/types';
-import { formatDuration, monthLongFrom, parsePercent } from './shared/format';
+import { formatDuration, monthLongFrom, parsePercent } from '@/domain/format';
 import { goalTime } from './simulator-utils';
 import { SimCard, SimEmpty } from './SimLayout';
 

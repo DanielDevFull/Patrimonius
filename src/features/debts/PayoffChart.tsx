@@ -5,7 +5,7 @@ import {
   ChartFrame,
   ChartTooltipBox,
   type TooltipRow,
-} from '@/features/simulators/shared/ChartParts';
+} from '@/components/charts/ChartParts';
 import {
   AXIS_TICK,
   CHART_AXIS,
@@ -14,8 +14,8 @@ import {
   CROSSHAIR,
   SERIES_COLORS,
   activeRow,
-} from '@/features/simulators/shared/chart-theme';
-import { formatDuration } from '@/features/simulators/shared/format';
+} from '@/components/charts/chart-theme';
+import { formatDuration } from '@/domain/format';
 import { STRATEGY_META, yearlyIndices, type PayoffChartRow } from './debt-utils';
 
 const SERIES = [

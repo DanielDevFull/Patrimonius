@@ -3,7 +3,7 @@ import type { ForecastPoint } from '@/analytics';
 import { formatDateBR } from '@/domain/dates';
 import { ChartTooltip } from './ChartTooltip';
 import { formatAxisDay, axisReaisFormatter } from './format';
-import { useChartTheme, useHideValues } from './theme';
+import { useChartTheme, useHideValues } from '@/components/charts/theme';
 
 export interface ForecastChartProps {
   points: ForecastPoint[];

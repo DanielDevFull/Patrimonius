@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react';
+import type { ComponentPropsWithRef, ReactNode } from 'react';
 import { cn } from './cn';
 
 export interface FieldProps {
@@ -32,11 +32,12 @@ export function Field({ label, htmlFor, hint, error, children, className }: Fiel
 export const controlClass =
   'h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm transition-colors focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100';
 
-export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+/** Para mudar largura/tamanho, envolva em um container (as classes não são mescladas com as do controle). */
+export function Input({ className, ...rest }: ComponentPropsWithRef<'input'>) {
   return <input className={cn(controlClass, className)} {...rest} />;
 }
 
-export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+export function Select({ className, children, ...rest }: ComponentPropsWithRef<'select'>) {
   return (
     <select className={cn(controlClass, 'pr-8', className)} {...rest}>
       {children}
@@ -44,7 +45,7 @@ export function Select({ className, children, ...rest }: SelectHTMLAttributes<HT
   );
 }
 
-export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Textarea({ className, ...rest }: ComponentPropsWithRef<'textarea'>) {
   return <textarea className={cn(controlClass, 'h-auto min-h-20 py-2', className)} {...rest} />;
 }
 

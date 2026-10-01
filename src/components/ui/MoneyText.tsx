@@ -1,9 +1,9 @@
 import { Fragment, useMemo } from 'react';
-import { splitMoneyText } from './dashboard-utils';
+import { splitMoneyText } from '@/domain/money';
 
 /**
- * Texto do agente (insight, parágrafo de relatório) com os valores em reais marcados com a classe `.money`,
- * para serem borrados no modo "ocultar valores" sem esconder a frase inteira.
+ * Exibe um texto pronto (insight, relatório, resposta do agente, razões de simulação) marcando cada valor em reais
+ * com a classe `money`, para que o modo "ocultar valores" os esconda sem esconder a frase inteira.
  */
 export function MoneyText({ text }: { text: string }) {
   const parts = useMemo(() => splitMoneyText(text), [text]);

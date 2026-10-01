@@ -3,7 +3,7 @@ import { useId, useMemo, useState, type ReactNode } from 'react';
 import { compareStrategies, type PayoffDebtInput, type PayoffPlan, type PayoffStrategy } from '@/analytics';
 import { Badge, Button, Card, CardHeader, Field, Money, MoneyInput, cn } from '@/components/ui';
 import type { Cents, ISODate } from '@/domain/types';
-import { formatDuration, monthLongFrom, monthShortFrom } from '@/features/simulators/shared/format';
+import { formatDuration, monthLongFrom, monthShortFrom } from '@/domain/format';
 import {
   STRATEGY_META,
   defaultPayoffBudget,

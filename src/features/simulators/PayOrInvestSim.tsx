@@ -3,7 +3,7 @@ import { useId, useMemo, useState } from 'react';
 import { debtCurrentBalance } from '@/analytics';
 import { Field, Input, Money, MoneyInput, Select, StatCard, cn } from '@/components/ui';
 import type { Cents, Debt, DebtPayment } from '@/domain/types';
-import { formatRate, parsePercent, rateToInput } from './shared/format';
+import { formatRate, parsePercent, rateToInput } from '@/domain/format';
 import { payOrInvest } from './simulator-utils';
 import { SimCard, SimEmpty } from './SimLayout';
 

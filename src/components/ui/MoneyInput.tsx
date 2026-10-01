@@ -37,7 +37,8 @@ export function MoneyInput({
 
   // Sincroniza quando o valor muda externamente (ex.: reset do formulário).
   useEffect(() => {
-    if (focused) return;
+    // Com foco, só sincroniza quando o valor é limpo externamente (ex.: "Salvar e novo").
+    if (focused && value !== null) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sincronização intencional com prop externa
     setText(value == null ? '' : formatDecimal(value));
   }, [value, focused]);

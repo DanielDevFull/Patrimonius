@@ -3,7 +3,7 @@ import { Badge, Button, Field, Input, Modal, Money, MoneyInput, cn, useToast } f
 import { revalueAsset } from '@/db/repo';
 import { formatDateBR } from '@/domain/dates';
 import type { Asset, AssetValuation, Cents, ISODate } from '@/domain/types';
-import { formatSignedPercent } from '@/features/simulators/shared/format';
+import { formatSignedPercent } from '@/domain/format';
 import { validateRevaluation, valuationRows } from './networth-utils';
 
 export interface RevalueModalProps {

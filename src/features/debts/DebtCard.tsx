@@ -17,7 +17,7 @@ import { diffDays, formatDateBR } from '@/domain/dates';
 import { formatPercent } from '@/domain/money';
 import { plural } from '@/domain/text';
 import { DEBT_TYPE_LABELS, type Debt, type DebtPayment, type ISODate } from '@/domain/types';
-import { formatRate } from '@/features/simulators/shared/format';
+import { formatRate } from '@/domain/format';
 import { isHighInterest, nextDueDate } from './debt-utils';
 
 export interface DebtCardProps {

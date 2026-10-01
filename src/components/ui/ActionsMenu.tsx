@@ -1,6 +1,7 @@
 import { MoreVertical } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { cn, IconButton } from '@/components/ui';
+import { IconButton } from './Button';
+import { cn } from './cn';
 
 export interface ActionsMenuItem {
   label: string;

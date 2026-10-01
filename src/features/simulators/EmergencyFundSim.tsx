@@ -3,7 +3,7 @@ import { useId, useMemo, useState } from 'react';
 import { emergencyFund, type EmergencyFundLevel } from '@/analytics';
 import { Badge, Button, Field, Input, Money, MoneyInput, ProgressBar, type BadgeTone } from '@/components/ui';
 import type { Cents, FinanceData, ISODate } from '@/domain/types';
-import { formatDuration, monthLongFrom, parsePercent, parsePositiveInt } from './shared/format';
+import { formatDuration, monthLongFrom, parsePercent, parsePositiveInt } from '@/domain/format';
 import { monthlyToCompleteIn, reservePlan } from './simulator-utils';
 import { SimCard, SimEmpty } from './SimLayout';
 

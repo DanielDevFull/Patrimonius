@@ -1,3 +1,4 @@
+import { splitMoneyText } from '@/domain/money';
 import { describe, expect, it } from 'vitest';
 import type { CategoryTotal, HealthComponent } from '@/analytics';
 import { ROUTES, newTransactionPath } from '@/app/navigation';
@@ -14,7 +15,6 @@ import {
   greetingFor,
   greetingLine,
   recentTransactions,
-  splitMoneyText,
   weakestComponent,
   whenPhrase,
 } from './dashboard-utils';

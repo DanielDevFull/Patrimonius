@@ -9,7 +9,7 @@ import {
   parsePercent,
   parsePositiveInt,
   rateToInput,
-} from '@/features/simulators/shared/format';
+} from '@/domain/format';
 
 /** A partir desta taxa (% a.m.) os juros são considerados altos. */
 export const HIGH_INTEREST_PCT = 4;
